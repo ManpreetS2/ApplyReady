@@ -1,0 +1,31 @@
+{
+  "name": "applyready",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Know what's missing before you press submit.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w @applyready/server\" \"npm run dev -w @applyready/client\"",
+    "dev:server": "npm run dev -w @applyready/server",
+    "dev:client": "npm run dev -w @applyready/client",
+    "typecheck": "npm run build -w @applyready/shared && npm run typecheck -w @applyready/server && npm run typecheck -w @applyready/client",
+    "test": "npm run test -w @applyready/server",
+    "test:unit": "npm run test:unit -w @applyready/server",
+    "test:integration": "npm run test:integration -w @applyready/server",
+    "build": "npm run build -w @applyready/shared && npm run build -w @applyready/client && npm run build -w @applyready/server",
+    "start": "npm run start -w @applyready/server",
+    "db:init": "npm run db:init -w @applyready/server",
+    "db:seed": "npm run db:seed -w @applyready/server",
+    "db:reset": "npm run db:reset -w @applyready/server"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Local data
+data/
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+logs/
+extracted/
+
+# Builds
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Temporary
+tmp/
+temp/
+.tmp/
+*.log
+.cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cursor
+.cursor/
+.cursorignore
+
+# Test artifacts
+packages/server/test-data/
+packages/server/tmp/

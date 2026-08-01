@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --bg: #fbf8f3;
+  --fg: #131c19;
+  --card: rgba(255, 255, 255, 0.78);
+  --line: rgba(38, 52, 48, 0.12);
+  --accent: #28735c;
+}
+
+.dark {
+  color-scheme: dark;
+  --bg: #131c19;
+  --fg: #f4f7f5;
+  --card: rgba(38, 52, 48, 0.72);
+  --line: rgba(244, 247, 245, 0.12);
+  --accent: #7fc9af;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(80, 171, 142, 0.16), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(230, 215, 192, 0.55), transparent 50%),
+    var(--bg);
+  color: var(--fg);
+}
+
+.dark body,
+.dark {
+  background:
+    radial-gradient(1000px 500px at 15% -15%, rgba(80, 171, 142, 0.14), transparent 55%),
+    radial-gradient(800px 420px at 90% 0%, rgba(55, 75, 68, 0.55), transparent 50%),
+    var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-600 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-accent-700 text-white hover:bg-accent-600 dark:bg-accent-400 dark:text-ink-950 dark:hover:bg-accent-300;
+  }
+  .btn-secondary {
+    @apply btn border border-ink-200 bg-white/70 text-ink-900 hover:bg-white dark:border-ink-700 dark:bg-ink-900/60 dark:text-ink-50 dark:hover:bg-ink-800;
+  }
+  .btn-ghost {
+    @apply btn text-ink-700 hover:bg-ink-100/70 dark:text-ink-100 dark:hover:bg-ink-800;
+  }
+  .btn-danger {
+    @apply btn bg-danger-600 text-white hover:bg-danger-500;
+  }
+  .card {
+    @apply rounded-2xl border border-[var(--line)] bg-[var(--card)] shadow-soft backdrop-blur;
+  }
+  .input {
+    @apply w-full rounded-xl border border-ink-200 bg-white/80 px-3 py-2.5 text-sm text-ink-950 outline-none ring-accent-600/30 transition focus:ring-2 dark:border-ink-700 dark:bg-ink-950/50 dark:text-ink-50;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-ink-800 dark:text-ink-100;
+  }
+  .evidence {
+    @apply rounded-xl border border-dashed border-ink-300/80 bg-sand-50/80 p-3 font-mono text-xs leading-relaxed text-ink-800 dark:border-ink-600 dark:bg-ink-950/40 dark:text-ink-100;
+  }
+  .status-pill {
+    @apply inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold;
+  }
+}
+
+@page {
+  margin: 16mm;
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .card {
+    break-inside: avoid;
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+  }
+}
