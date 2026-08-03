@@ -43,3 +43,13 @@ Thumbs.db
 # Test artifacts
 packages/server/test-data/
 packages/server/tmp/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+tmp/
+docs/demo/RECORDING_BLOCKER.txt
+
+# Browser profiles / local automation junk
+**/chrome-user-data/
+**/browser-profile/

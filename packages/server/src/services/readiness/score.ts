@@ -17,7 +17,11 @@ export function computeReadiness(params: {
 }): ReadinessReport {
   const { applicationId, requirements, matches, issues, conflicts } = params;
   const required = requirements.filter(
-    (r) => r.required && r.category !== "other",
+    (r) =>
+      r.required &&
+      r.category !== "other" &&
+      r.category !== "proof_of_eligibility" &&
+      r.category !== "proof_of_enrollment",
   );
   const openIssues = issues.filter((i) => i.status === "open");
   const blocking = openIssues.filter((i) => i.severity === "blocking");

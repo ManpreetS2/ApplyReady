@@ -14,16 +14,22 @@
     "test": "npm run test -w @applyready/server",
     "test:unit": "npm run test:unit -w @applyready/server",
     "test:integration": "npm run test:integration -w @applyready/server",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
     "build": "npm run build -w @applyready/shared && npm run build -w @applyready/client && npm run build -w @applyready/server",
     "start": "npm run start -w @applyready/server",
     "db:init": "npm run db:init -w @applyready/server",
     "db:seed": "npm run db:seed -w @applyready/server",
-    "db:reset": "npm run db:reset -w @applyready/server"
+    "db:reset": "npm run db:reset -w @applyready/server",
+    "screenshots": "node scripts/screenshots.mjs",
+    "demo:record": "node scripts/record-demo.mjs",
+    "qa": "npm run typecheck && npm run test:unit && npm run test:integration && npm run build && npm run test:e2e"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
+    "@playwright/test": "^1.50.1",
     "concurrently": "^9.1.2",
     "typescript": "^5.7.3"
   },

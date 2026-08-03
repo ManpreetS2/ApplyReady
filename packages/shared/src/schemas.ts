@@ -117,6 +117,7 @@ export const vaultUpdateSchema = z.object({
   category: requirementCategorySchema.optional(),
   notes: z.string().nullable().optional(),
   expirationDate: z.string().nullable().optional(),
+  version: z.number().int().positive().optional(),
 });
 
 export const mergeRequirementsSchema = z.object({

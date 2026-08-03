@@ -85,7 +85,7 @@ function confidenceLevel(score: number): number {
 }
 
 function detectOptional(sentence: string): boolean {
-  return /\b(optional|recommended|may submit|not required|encouraged)\b/i.test(
+  return /\b(optional|recommended|may submit|may include|not required|encouraged)\b/i.test(
     sentence,
   );
 }
@@ -240,7 +240,9 @@ export class RuleRequirementExtractor implements RequirementExtractor {
         const extensions = extractExtensions(sentence);
         const filenamePattern = extractFilenamePattern(sentence);
         const recCount = extractRecCount(sentence);
-        const signatureRequired = /\bsignature\b/i.test(sentence);
+        const signatureRequired =
+          /\bsignature\b/i.test(sentence) ||
+          pattern.category === "recommendation";
         const match = pattern.terms.exec(sentence);
         const evidence =
           match != null
@@ -328,6 +330,26 @@ export class RuleRequirementExtractor implements RequirementExtractor {
           }),
         );
       }
+
+      if (
+        /\benrolled\b/i.test(lower) &&
+        /\b(must|required|shall)\b/i.test(lower) &&
+        /\b(high school|college|university|academic year)\b/i.test(lower)
+      ) {
+        drafts.push(
+          emptyDraft({
+            title: "Enrollment Requirement",
+            description: sentence,
+            category: "proof_of_enrollment",
+            required: true,
+            sourceEvidence: sentence,
+            sourceLocation: `Sentence ${i + 1}`,
+            confidence: 0.65,
+            extractionRule: "enrollment-requirement",
+            customValidationNotes: sentence,
+          }),
+        );
+      }
     }
 
     const deadline = extractDeadline(cleaned);
@@ -362,13 +384,15 @@ export class RuleRequirementNormalizer implements RequirementNormalizer {
         : [draft.category];
 
     let acceptedFileExtensions = draft.acceptedFileExtensions;
-    if (
-      acceptedFileExtensions.length === 0 &&
-      ["resume", "transcript", "essay", "recommendation", "combined_packet"].includes(
-        draft.category,
-      )
-    ) {
-      acceptedFileExtensions = [".pdf"];
+    if (acceptedFileExtensions.length === 0) {
+      if (
+        ["resume", "transcript", "combined_packet"].includes(draft.category)
+      ) {
+        acceptedFileExtensions = [".pdf"];
+      } else if (["essay", "recommendation"].includes(draft.category)) {
+        // Essays/recommendations often arrive as DOCX unless a format is stated.
+        acceptedFileExtensions = [".pdf", ".docx"];
+      }
     }
 
     return {

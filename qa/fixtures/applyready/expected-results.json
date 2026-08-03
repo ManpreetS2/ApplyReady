@@ -1,0 +1,113 @@
+{
+  "project": "ApplyReady",
+  "fixture_pack_version": "1.0.0",
+  "fictional_data_only": true,
+  "requirements_sources": [
+    {
+      "file": "requirements/future_engineers_requirements.txt",
+      "expected": "Extract required resume PDF, transcript, 400-500 word essay, one recommendation, exact filename rule, deadline, GPA, enrollment, optional portfolio."
+    },
+    {
+      "file": "requirements/future_engineers_requirements.md",
+      "expected": "Same extraction as TXT."
+    },
+    {
+      "file": "requirements/future_engineers_requirements.pdf",
+      "expected": "Same extraction as TXT with PDF evidence locations."
+    },
+    {
+      "file": "requirements/future_engineers_requirements.docx",
+      "expected": "Same extraction as TXT with DOCX source evidence."
+    }
+  ],
+  "initial_bad_packet": [
+    {
+      "file": "initial_bad_packet/Jordan_Lee_Resume.pdf",
+      "expected": "Resume likely matches; outdated email conflicts with confirmed profile."
+    },
+    {
+      "file": "initial_bad_packet/Engineering_Essay_620_Words.docx",
+      "expected": "Essay match; 620 words exceeds 500; references Bright Tomorrow Scholarship."
+    },
+    {
+      "file": "initial_bad_packet/Recommendation_Letter_Other_Scholarship.pdf",
+      "expected": "Recommendation match; addressed to another scholarship."
+    },
+    {
+      "file": "initial_bad_packet/JordanLeeFinal.pdf",
+      "expected": "Combined packet candidate; exact filename rule fails."
+    },
+    {
+      "file": "(intentionally absent transcript)",
+      "expected": "Required transcript is missing."
+    }
+  ],
+  "corrected_packet": [
+    {
+      "file": "corrected_packet/Lee_Jordan_Resume.pdf",
+      "expected": "Valid current resume; email jordan.lee@example.com."
+    },
+    {
+      "file": "corrected_packet/Lee_Jordan_Essay.docx",
+      "expected": "450 words; correct organization; should pass essay rules."
+    },
+    {
+      "file": "corrected_packet/Lee_Jordan_Recommendation.pdf",
+      "expected": "Correct organization and signature text present."
+    },
+    {
+      "file": "corrected_packet/Lee_Jordan_Transcript.pdf",
+      "expected": "Valid unofficial transcript; GPA 3.62; enrolled in 2026."
+    },
+    {
+      "file": "corrected_packet/Lee_Jordan_2026.pdf",
+      "expected": "Exact filename rule passes and packet can reach Ready after confirmations."
+    }
+  ],
+  "edge_cases": [
+    {
+      "file": "edge_cases/duplicate_resume_copy.pdf",
+      "expected": "Exact duplicate of initial resume should be detected."
+    },
+    {
+      "file": "edge_cases/duplicate_essay_copy.docx",
+      "expected": "Exact duplicate of initial essay should be detected."
+    },
+    {
+      "file": "edge_cases/low_text_scan_like.pdf",
+      "expected": "Low/no extractable text warning; do not claim successful OCR."
+    },
+    {
+      "file": "edge_cases/corrupt_document.pdf",
+      "expected": "Graceful corrupt PDF error."
+    },
+    {
+      "file": "edge_cases/invalid_mime_disguised_as_pdf.pdf",
+      "expected": "Extension/MIME or parser validation error."
+    },
+    {
+      "file": "edge_cases/empty_document.txt",
+      "expected": "Empty or no extractable text error."
+    },
+    {
+      "file": "edge_cases/Conflicting_Profile_Resume.pdf",
+      "expected": "Strong applicant profile conflicts; must not silently replace confirmed values."
+    },
+    {
+      "file": "edge_cases/Recommendation_No_Signature_Text.pdf",
+      "expected": "Use uncertainty wording: could not confirm signature text."
+    },
+    {
+      "file": "edge_cases/Jordan_Lee_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Resume.pdf",
+      "expected": "Safe filename handling without crash or path overflow."
+    },
+    {
+      "file": "edge_cases/.._.._Jordan_Lee_Resume.pdf",
+      "expected": "Sanitize suspicious filename; no path traversal."
+    },
+    {
+      "file": "edge_cases/unsupported_format.rtf",
+      "expected": "Unsupported format rejected with helpful message."
+    }
+  ]
+}

@@ -80,7 +80,7 @@ body {
     @apply mb-1.5 block text-sm font-medium text-ink-800 dark:text-ink-100;
   }
   .evidence {
-    @apply rounded-xl border border-dashed border-ink-300/80 bg-sand-50/80 p-3 font-mono text-xs leading-relaxed text-ink-800 dark:border-ink-600 dark:bg-ink-950/40 dark:text-ink-100;
+    @apply max-h-48 overflow-auto rounded-xl border border-dashed border-ink-300/80 bg-sand-50/80 p-3 font-mono text-xs leading-relaxed text-ink-800 dark:border-ink-600 dark:bg-ink-950/40 dark:text-ink-100 break-words;
   }
   .status-pill {
     @apply inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold;

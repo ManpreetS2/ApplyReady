@@ -83,16 +83,17 @@ export class LocalDocumentReader implements DocumentReader {
           ["Remove the password and upload an unlocked PDF."],
         );
       }
-      if (/xref|format|invalid|missing/i.test(message)) {
-        return {
-          text: "",
-          pageCount: null,
-          title: null,
-          warnings: [
-            "This PDF contains little or no extractable text. It may be an image-only scan. OCR is not included in this version.",
+      if (/xref|format|invalid|missing|corrupt|trailer/i.test(message)) {
+        throw new AppError(
+          "CORRUPT_PDF",
+          "This PDF appears corrupt or unreadable.",
+          400,
+          [
+            "Re-export or repair the PDF, then upload again.",
+            "If the file is an image-only scan, convert it to a searchable PDF (OCR is not included in this version).",
           ],
-          lowText: true,
-        };
+          { reason: message },
+        );
       }
       throw new AppError(
         "PDF_PARSE_FAILED",

@@ -17,6 +17,8 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
     .listRequirements(applicationId)
     .filter((r) => r.category !== "other" || r.filenamePattern);
   const documents = repos.listDocuments(applicationId);
+  const previousMatches = repos.listMatches(applicationId);
+  const previousConflicts = repos.listConflicts(applicationId);
   const matcher = new HeuristicRequirementMatcher();
   const validator = new RuleDocumentValidator();
   const consistency = new ApplicantConsistencyChecker();
@@ -24,10 +26,33 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
   repos.clearAnalysis(applicationId);
 
   // Preserve previously resolved/dismissed issues by only clearing open ones (done above).
+  const previousConfirmed = new Set(
+    previousMatches
+      .filter((m) => m.userConfirmed)
+      .map((m) => `${m.requirementId}::${m.documentId}`),
+  );
+  const resolvedConflictFields = new Set(
+    previousConflicts.filter((c) => c.resolved).map((c) => c.field),
+  );
 
   const matches = [];
   for (const requirement of requirements) {
     if (requirement.category === "other" && !requirement.filenamePattern) continue;
+
+    // Eligibility conditions are validated against extracted facts/profile values,
+    // not by requiring a dedicated uploaded "GPA document".
+    if (
+      requirement.category === "proof_of_eligibility" ||
+      requirement.category === "proof_of_enrollment"
+    ) {
+      validateEligibilityRequirement(repos, {
+        applicationId,
+        requirement,
+        documents,
+        organization: app.organization,
+      });
+      continue;
+    }
 
     let best = null as ReturnType<typeof matcher.match> | null;
     let bestDocId: string | null = null;
@@ -59,19 +84,42 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       }
 
       if (finding.status !== "does_not_match") {
+        const confirmed = previousConfirmed.has(
+          `${requirement.id}::${document.id}`,
+        );
         const saved = repos.upsertMatch({
           id: newId(),
           applicationId,
           requirementId: requirement.id,
           documentId: document.id,
-          status: finding.status,
-          confidence: finding.confidence,
+          status: confirmed ? "confirmed" : finding.status,
+          confidence: confirmed
+            ? Math.max(finding.confidence, 0.95)
+            : finding.confidence,
           explanation: finding.explanation,
           evidence: finding.evidence,
-          userConfirmed: false,
+          userConfirmed: confirmed,
         });
         matches.push(saved);
       }
+    }
+
+    const confirmedBest = matches
+      .filter(
+        (m) =>
+          m.requirementId === requirement.id &&
+          m.userConfirmed &&
+          m.status !== "does_not_match",
+      )
+      .sort((a, b) => b.confidence - a.confidence)[0];
+    if (confirmedBest) {
+      best = {
+        status: "confirmed",
+        confidence: confirmedBest.confidence,
+        explanation: confirmedBest.explanation,
+        evidence: confirmedBest.evidence,
+      };
+      bestDocId = confirmedBest.documentId;
     }
 
     if (!best || !bestDocId) {
@@ -137,12 +185,15 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       }
     }
 
-    if (best.status === "needs_confirmation" || best.status === "possible") {
+    if (
+      (best.status === "needs_confirmation" || best.status === "possible") &&
+      !previousConfirmed.has(`${requirement.id}::${bestDocId}`)
+    ) {
       repos.insertIssue({
         id: newId(),
         applicationId,
         requirementId: requirement.id,
-        documentId: document.id,
+        documentId: bestDocId,
         severity: "needs_confirmation",
         code: "MATCH_NEEDS_CONFIRMATION",
         title: `Confirm match for ${requirement.title}`,
@@ -213,6 +264,35 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
     });
   }
 
+  const existingProfile = repos.getProfile(applicationId);
+  if (existingProfile?.email) {
+    const mismatched = emailFacts.filter(
+      (e) =>
+        e.fact.value.toLowerCase() !== existingProfile.email!.toLowerCase(),
+    );
+    if (mismatched.length > 0) {
+      repos.insertIssue({
+        id: newId(),
+        applicationId,
+        requirementId: null,
+        documentId: mismatched[0]?.doc.id ?? null,
+        severity: "warning",
+        code: "EMAIL_PROFILE_MISMATCH",
+        title: "Resume email differs from confirmed applicant email",
+        explanation: `Confirmed applicant email is ${existingProfile.email}, but document(s) contain: ${[
+          ...new Set(mismatched.map((m) => m.fact.value)),
+        ].join(", ")}.`,
+        evidence: mismatched
+          .map((e) => `${e.doc.originalFilename}: ${e.fact.value}`)
+          .join(" | "),
+        recommendedFix:
+          "Update the resume/contact document to the confirmed email, or revise the applicant profile if the document is correct.",
+        status: "open",
+        dismissible: true,
+      });
+    }
+  }
+
   // Consistency conflicts
   const factsByDocument = documents.map((doc) => ({
     documentId: doc.id,
@@ -221,6 +301,7 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
   }));
   const conflictFindings = consistency.check(factsByDocument);
   for (const finding of conflictFindings) {
+    if (resolvedConflictFields.has(finding.field)) continue;
     repos.insertConflict({
       id: newId(),
       applicationId,
@@ -231,7 +312,7 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
     });
   }
 
-  // Populate profile candidates carefully (do not silently overwrite conflicts)
+  // Populate profile candidates carefully (do not silently overwrite confirmed values)
   const profile = repos.getProfile(applicationId);
   if (profile) {
     const patch: Record<string, string | null> = {};
@@ -244,6 +325,16 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       "gpa",
       "expected_graduation_date",
     ] as const) {
+      const key =
+        field === "full_legal_name"
+          ? "fullLegalName"
+          : field === "expected_graduation_date"
+            ? "expectedGraduationDate"
+            : field;
+      const currentValue = (profile as unknown as Record<string, unknown>)[key];
+      if (typeof currentValue === "string" && currentValue.trim()) {
+        continue;
+      }
       const values = [
         ...new Set(
           factsByDocument.flatMap((d) =>
@@ -252,16 +343,12 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
         ),
       ];
       if (values.length === 1) {
-        const key =
-          field === "full_legal_name"
-            ? "fullLegalName"
-            : field === "expected_graduation_date"
-              ? "expectedGraduationDate"
-              : field;
         patch[key] = values[0]!;
       }
     }
-    repos.updateProfile(applicationId, patch);
+    if (Object.keys(patch).length > 0) {
+      repos.updateProfile(applicationId, patch);
+    }
   }
 
   const allMatches = repos.listMatches(applicationId);
@@ -315,6 +402,8 @@ function issueTitle(rule: string, requirementTitle: string): string {
       return "Incorrect file format";
     case "low_text_pdf":
       return "Little extractable text";
+    case "signature_text":
+      return "Signature could not be confirmed";
     default:
       return `Issue with ${requirementTitle}`;
   }
@@ -334,8 +423,129 @@ function fixFor(rule: string): string {
       return "Export/upload the document in an accepted file format.";
     case "low_text_pdf":
       return "Provide a searchable PDF (OCR is not included in this version).";
+    case "signature_text":
+      return "Ensure the recommendation includes clear signature-related text, or confirm the signed letter manually.";
     default:
       return "Review the evidence and update the document or requirement.";
+  }
+}
+
+function validateEligibilityRequirement(
+  repos: Repositories,
+  params: {
+    applicationId: string;
+    requirement: ReturnType<Repositories["listRequirements"]>[number];
+    documents: ReturnType<Repositories["listDocuments"]>;
+    organization: string;
+  },
+) {
+  const { applicationId, requirement, documents } = params;
+  const profile = repos.getProfile(applicationId);
+  const allFacts = documents.flatMap((doc) =>
+    repos.listFacts(doc.id).map((fact) => ({ doc, fact })),
+  );
+
+  if (/gpa/i.test(requirement.title) || /gpa/i.test(requirement.description)) {
+    const minMatch = requirement.description.match(
+      /(?:minimum|at least|gpa(?:\s+of)?)\s*(\d+(?:\.\d+)?)/i,
+    );
+    const minimum = minMatch ? Number(minMatch[1]) : null;
+    const gpaValues = [
+      ...(profile?.gpa ? [profile.gpa] : []),
+      ...allFacts
+        .filter((f) => f.fact.factType === "gpa")
+        .map((f) => f.fact.value),
+    ];
+    const numeric = gpaValues
+      .map((v) => Number(String(v).replace(/[^\d.]/g, "")))
+      .filter((n) => Number.isFinite(n) && n > 0 && n <= 4.5);
+    const best = numeric.length ? Math.max(...numeric) : null;
+    const passed = minimum == null ? best != null : best != null && best >= minimum;
+    repos.insertValidation({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId:
+        allFacts.find((f) => f.fact.factType === "gpa")?.doc.id ?? null,
+      rule: "minimum_gpa",
+      passed,
+      severity: passed ? "suggestion" : "blocking",
+      message: passed
+        ? `GPA ${best} meets the minimum${minimum != null ? ` of ${minimum}` : ""}.`
+        : best == null
+          ? "No GPA value was found in the applicant profile or uploaded documents."
+          : `GPA ${best} is below the minimum of ${minimum}.`,
+      evidence:
+        gpaValues.join(" | ") ||
+        requirement.sourceEvidence,
+    });
+    if (!passed) {
+      repos.insertIssue({
+        id: newId(),
+        applicationId,
+        requirementId: requirement.id,
+        documentId: null,
+        severity: "blocking",
+        code: "MINIMUM_GPA",
+        title: "Minimum GPA not verified",
+        explanation:
+          best == null
+            ? "ApplyReady could not find a GPA value to compare against the minimum requirement."
+            : `Found GPA ${best}, which is below the required minimum of ${minimum}.`,
+        evidence: requirement.sourceEvidence,
+        recommendedFix:
+          "Upload a transcript that includes GPA, or confirm the GPA in the applicant profile.",
+        status: "open",
+        dismissible: false,
+      });
+    }
+    return;
+  }
+
+  if (
+    /enroll/i.test(requirement.title) ||
+    /enroll/i.test(requirement.description)
+  ) {
+    const enrollmentHints = allFacts.filter((f) =>
+      ["school", "expected_graduation_date", "enrollment"].includes(
+        f.fact.factType,
+      ),
+    );
+    const profileHints = Boolean(
+      profile?.school || profile?.expectedGraduationDate,
+    );
+    const passed = enrollmentHints.length > 0 || profileHints;
+    repos.insertValidation({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId: enrollmentHints[0]?.doc.id ?? null,
+      rule: "enrollment",
+      passed,
+      severity: passed ? "suggestion" : "needs_confirmation",
+      message: passed
+        ? "Enrollment-related evidence was found in profile or documents."
+        : "ApplyReady could not confirm enrollment from uploaded materials.",
+      evidence: requirement.sourceEvidence,
+    });
+    if (!passed) {
+      repos.insertIssue({
+        id: newId(),
+        applicationId,
+        requirementId: requirement.id,
+        documentId: null,
+        severity: "needs_confirmation",
+        code: "ENROLLMENT",
+        title: "Enrollment could not be confirmed",
+        explanation:
+          "No clear enrollment evidence was found in the applicant profile or documents.",
+        evidence: requirement.sourceEvidence,
+        recommendedFix:
+          "Confirm enrollment in the applicant profile or upload a transcript/enrollment verification.",
+        status: "open",
+        dismissible: true,
+      });
+    }
   }
 }
 
