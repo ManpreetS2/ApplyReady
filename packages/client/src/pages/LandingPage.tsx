@@ -49,7 +49,7 @@ export function LandingPage() {
           {
             icon: Lock,
             title: "Local by design",
-            body: "Documents stay on your machine. No cloud AI, analytics, or paid APIs.",
+            body: "Files stay on the machine running ApplyReady—local SQLite and uploads, not hosted AI or cloud sync.",
           },
         ].map((item) => (
           <article key={item.title} className="card p-6">

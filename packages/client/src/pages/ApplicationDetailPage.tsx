@@ -279,7 +279,14 @@ export function ApplicationDetailPage() {
                       {req.userConfirmed ? "Confirmed" : "Needs confirmation"}
                     </p>
                   </div>
-                  {match ? <MatchBadge status={match.status} /> : (
+                  {match ? (
+                    <MatchBadge status={match.status} />
+                  ) : req.category === "proof_of_eligibility" ||
+                    req.category === "proof_of_enrollment" ? (
+                    <span className="status-pill bg-sand-100 text-ink-700 dark:bg-ink-800 dark:text-ink-100">
+                      Eligibility check
+                    </span>
+                  ) : (
                     <span className="status-pill bg-rose-100 text-danger-600">Missing</span>
                   )}
                 </div>
@@ -332,6 +339,8 @@ export function ApplicationDetailPage() {
                       Confirm match
                     </button>
                   ) : null}
+                  {req.category !== "proof_of_eligibility" &&
+                  req.category !== "proof_of_enrollment" ? (
                   <label className="btn-ghost">
                     Assign document
                     <select
@@ -353,6 +362,11 @@ export function ApplicationDetailPage() {
                       ))}
                     </select>
                   </label>
+                  ) : (
+                    <p className="text-sm text-ink-500">
+                      Validated from profile and document facts—no separate upload required.
+                    </p>
+                  )}
                 </div>
               </article>
             );

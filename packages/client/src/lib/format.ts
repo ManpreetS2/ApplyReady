@@ -24,6 +24,20 @@ export function daysRemaining(deadline: string | null): number | null {
 
 export function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
+  // Date-only values (YYYY-MM-DD) must be treated as local calendar dates.
+  // `new Date('YYYY-MM-DD')` is UTC midnight and shifts a day backward in western timezones.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]) - 1;
+    const day = Number(dateOnly[3]);
+    const local = new Date(year, month, day);
+    return local.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString(undefined, {

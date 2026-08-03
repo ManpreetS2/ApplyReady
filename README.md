@@ -2,15 +2,15 @@
 
 **Know what’s missing before you press submit.**
 
-Applicants still lose opportunities to incomplete packets: a missing transcript, an essay over the word limit, a recommendation addressed to the wrong organization, or a filename that breaks the required pattern.
+Applicants often submit incomplete, inconsistent, or incorrectly formatted application packets: a missing transcript, an essay over the word limit, a recommendation addressed to the wrong organization, or a filename that breaks the required pattern.
 
-**ApplyReady** extracts evidence-backed requirements, checks local documents with deterministic matching and validation, and explains what remains before submit — without sending files to hosted AI or analytics services.
+**ApplyReady** extracts evidence-backed requirements, analyzes local documents, matches materials to requirements, detects issues, and explains what remains before submission.
 
-**Proof:** the guided Future Engineers Scholarship demo progresses from **Not ready** to **Ready to submit** using the same pipelines as real packets.
+**Proof:** the fictional Future Engineers Scholarship guided demo progresses from **Not ready** to **Ready to submit** using the same deterministic pipelines as real packets.
 
-**Privacy:** documents remain on your machine. SQLite stores metadata locally; uploads stay in a local directory.
+**Privacy:** ApplyReady runs locally. The Express API stores metadata in a local SQLite database and uploaded files in a local upload directory on the machine running the app. Documents are not sent to hosted AI services, analytics, or cloud storage.
 
-**Limitations:** no OCR (image-only scans need a searchable PDF); rule-based matches may require confirmation; signature checks are text-only.
+**Limitations:** no OCR (image-only PDFs may need conversion to searchable PDFs); signature checks are text-only; rule-based results may require confirmation; webpage extraction does not execute JavaScript; physical-device testing has not been completed.
 
 > ApplyReady does not provide legal, immigration, financial, or professional compliance advice.
 
@@ -135,12 +135,13 @@ ApplyReady detects missing documents, format problems, content mismatches, dupli
 
 ## Privacy
 
-- Documents remain local to your machine
-- No files are sent to AI providers
+- ApplyReady runs as a local application (React client + Express API on your machine)
+- Uploaded documents are stored in a local upload directory configured for that process
+- SQLite stores metadata, extracted requirements, matches, issues, and short evidence excerpts locally
+- No files are sent to hosted AI providers
 - No analytics, telemetry, or tracking
-- SQLite stores metadata and extracted results locally
-- Uploaded files live in a local application data directory
 - Destructive deletes require confirmation
+- This is not browser-only storage: the local server process owns the database and files
 
 ## Technology stack
 
