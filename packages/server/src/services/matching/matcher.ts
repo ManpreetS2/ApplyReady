@@ -33,7 +33,15 @@ export class HeuristicRequirementMatcher implements RequirementMatcher {
       evidence.push(
         `Document category ${document.category} matches requirement category.`,
       );
-    } else if (document.category && document.category !== requirement.category) {
+    } else if (
+      document.category &&
+      document.category !== requirement.category &&
+      !(
+        requirement.category === "combined_packet" &&
+        requirement.filenamePattern &&
+        /^[A-Za-z]+_[A-Za-z]+_\d{4}\.pdf$/i.test(document.filename)
+      )
+    ) {
       score -= 0.25;
       evidence.push(
         `Document category ${document.category} differs from required ${requirement.category}.`,

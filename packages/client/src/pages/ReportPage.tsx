@@ -116,6 +116,9 @@ export function ReportPage() {
             {requirements.map((req) => {
               const match = matches.find((m) => m.requirementId === req.id);
               const doc = documents.find((d) => d.id === match?.documentId);
+              const isEligibility =
+                req.category === "proof_of_eligibility" ||
+                req.category === "proof_of_enrollment";
               return (
                 <li key={req.id} className="rounded-xl border border-[var(--line)] p-3 text-sm">
                   <p className="font-semibold">
@@ -124,7 +127,11 @@ export function ReportPage() {
                       ({req.required ? "required" : "optional"} · {req.category})
                     </span>
                   </p>
-                  <p>Match: {doc?.originalFilename || "None"} {match ? `(${match.status})` : ""}</p>
+                  <p>
+                    {isEligibility
+                      ? "Checked against applicant profile and extracted document facts (not a separate upload)."
+                      : `Match: ${doc?.originalFilename || "None"} ${match ? `(${match.status})` : ""}`}
+                  </p>
                   <div className="evidence mt-2">{req.sourceEvidence}</div>
                 </li>
               );

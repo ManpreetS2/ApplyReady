@@ -4,10 +4,12 @@ import type { RequirementCategory } from "@applyready/shared";
 import { Repositories } from "../../db/repositories.js";
 import {
   assertSafeUpload,
+  getExtension,
   hashBuffer,
   resolveUploadPath,
   sanitizeOriginalFilename,
 } from "../../utils/files.js";
+import { AppError } from "../../utils/errors.js";
 import { newId } from "../../utils/ids.js";
 import { countWords, excerpt } from "../../utils/text.js";
 import { HeuristicDocumentClassifier } from "./classify.js";
@@ -31,6 +33,25 @@ export async function processUploadedDocument(
     mimeType: params.mimeType,
     size: params.buffer.byteLength,
   });
+  const displayName = sanitizeOriginalFilename(params.originalFilename);
+
+  // Reject files whose extension claims PDF but contents are not PDF bytes.
+  if (
+    getExtension(displayName) === ".pdf" ||
+    params.mimeType === "application/pdf"
+  ) {
+    const head = params.buffer.subarray(0, 5).toString("utf8");
+    if (!head.startsWith("%PDF")) {
+      throw new AppError(
+        "INVALID_PDF_CONTENT",
+        "File extension or MIME type claims PDF, but the contents are not a valid PDF.",
+        400,
+        [
+          "Re-export the document as a real PDF, or upload the original DOCX/TXT/Markdown file.",
+        ],
+      );
+    }
+  }
 
   const kind = params.applicationId ? "applications" : "vault";
   const target = resolveUploadPath(kind, safeName);
@@ -44,7 +65,7 @@ export async function processUploadedDocument(
   try {
     readResult = await reader.read(
       params.buffer,
-      params.originalFilename,
+      displayName,
       params.mimeType,
     );
   } catch (error) {
@@ -54,7 +75,7 @@ export async function processUploadedDocument(
 
   const classification = classifier.classify(
     readResult.text,
-    params.originalFilename,
+    displayName,
   );
   const wordCount = countWords(readResult.text);
   const id = newId();
@@ -63,7 +84,7 @@ export async function processUploadedDocument(
     id,
     applicationId: params.applicationId,
     vaultDocumentId: params.vaultDocumentId ?? null,
-    originalFilename: sanitizeOriginalFilename(params.originalFilename),
+    originalFilename: displayName,
     storedFilename: safeName,
     mimeType: params.mimeType || "application/octet-stream",
     fileSize: params.buffer.byteLength,

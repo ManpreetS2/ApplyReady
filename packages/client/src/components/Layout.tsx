@@ -35,8 +35,9 @@ export function Layout() {
               <NavLink
                 key={item.to}
                 to={item.to}
+                aria-label={item.label}
                 className={({ isActive }) =>
-                  `inline-flex min-h-11 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${
+                  `inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${
                     isActive
                       ? "bg-ink-900 text-white dark:bg-accent-400 dark:text-ink-950"
                       : "text-ink-700 hover:bg-ink-100/80 dark:text-ink-100 dark:hover:bg-ink-800"
@@ -45,7 +46,9 @@ export function Layout() {
               >
                 <item.icon className="h-4 w-4" aria-hidden />
                 <span className="hidden sm:inline">{item.label}</span>
-                <span className="sm:hidden">{item.label.split(" ")[0]}</span>
+                <span className="sm:hidden" aria-hidden>
+                  {item.label.split(" ")[0]}
+                </span>
               </NavLink>
             ))}
             <button
@@ -54,7 +57,11 @@ export function Layout() {
               onClick={toggle}
               aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
-              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              {theme === "dark" ? (
+                <Sun className="h-4 w-4" aria-hidden />
+              ) : (
+                <Moon className="h-4 w-4" aria-hidden />
+              )}
             </button>
           </nav>
         </div>

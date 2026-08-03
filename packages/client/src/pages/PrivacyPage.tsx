@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 
 export function PrivacyPage() {
   const [storage, setStorage] = useState<{
@@ -11,6 +12,7 @@ export function PrivacyPage() {
   } | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [message, setMessage] = useState("");
+  const [confirmStep, setConfirmStep] = useState<0 | 1 | 2>(0);
 
   useEffect(() => {
     api.storage().then(setStorage).catch(setError);
@@ -27,7 +29,10 @@ export function PrivacyPage() {
 
       <ErrorBanner error={error} />
       {message ? (
-        <p className="card bg-accent-50 p-4 text-accent-900 dark:bg-accent-950/40 dark:text-accent-100">
+        <p
+          className="card bg-accent-50 p-4 text-accent-900 dark:bg-accent-950/40 dark:text-accent-100"
+          role="status"
+        >
           {message}
         </p>
       ) : null}
@@ -51,7 +56,7 @@ export function PrivacyPage() {
       <section className="card space-y-3 p-6">
         <h2 className="font-display text-2xl font-semibold">Local storage location</h2>
         {storage ? (
-          <dl className="space-y-2 font-mono text-xs">
+          <dl className="space-y-2 font-mono text-xs break-all">
             <div>
               <dt className="text-ink-500">Data directory</dt>
               <dd>{storage.dataDir}</dd>
@@ -75,25 +80,39 @@ export function PrivacyPage() {
         <button
           type="button"
           className="btn-danger"
-          onClick={async () => {
-            if (
-              !confirm(
-                "Clear ALL local ApplyReady data, including applications, vault files, and the database?",
-              )
-            )
-              return;
-            if (!confirm("This cannot be undone. Clear everything?")) return;
-            try {
-              await api.clearAll();
-              setMessage("All local ApplyReady data was cleared.");
-            } catch (e) {
-              setError(e);
-            }
-          }}
+          onClick={() => setConfirmStep(1)}
         >
           Clear all local data
         </button>
       </section>
+
+      <ConfirmDialog
+        open={confirmStep === 1}
+        title="Clear all local data?"
+        description="Clear ALL local ApplyReady data, including applications, vault files, and the database?"
+        confirmLabel="Continue"
+        danger
+        onCancel={() => setConfirmStep(0)}
+        onConfirm={() => setConfirmStep(2)}
+      />
+      <ConfirmDialog
+        open={confirmStep === 2}
+        title="Final confirmation"
+        description="This cannot be undone. Clear everything?"
+        confirmLabel="Clear everything"
+        danger
+        onCancel={() => setConfirmStep(0)}
+        onConfirm={async () => {
+          try {
+            await api.clearAll();
+            setMessage("All local ApplyReady data was cleared.");
+            setConfirmStep(0);
+          } catch (e) {
+            setError(e);
+            setConfirmStep(0);
+          }
+        }}
+      />
     </div>
   );
 }

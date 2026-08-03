@@ -25,8 +25,16 @@ export function getExtension(filename: string): string {
 }
 
 export function sanitizeOriginalFilename(filename: string): string {
-  const base = path.basename(filename).replace(/[^\w.\- ()[\]]+/g, "_");
-  return base.slice(0, 180) || "document";
+  const base = path
+    .basename(filename)
+    .replace(/\.\./g, "__")
+    .replace(/[\\/]/g, "_")
+    .replace(/[^\w.\- ()[\]]+/g, "_");
+  const ext = path.extname(base);
+  const stem = ext ? base.slice(0, -ext.length) : base;
+  const maxStem = Math.max(1, 180 - ext.length);
+  const truncated = `${stem.slice(0, maxStem)}${ext}`;
+  return truncated || "document";
 }
 
 export function makeSafeStoredFilename(originalFilename: string): string {
@@ -84,18 +92,26 @@ export function assertSafeUpload(params: {
     );
   }
 
-  if (originalFilename.includes("..") || originalFilename.includes("/") || originalFilename.includes("\\")) {
+  // Path-like names are sanitized rather than rejected so uploads cannot escape
+  // the upload directory while still accepting awkward real-world filenames.
+  const sanitized = sanitizeOriginalFilename(originalFilename);
+  const sanitizedExt = getExtension(sanitized);
+  if (
+    !ALLOWED_EXTENSIONS.includes(
+      sanitizedExt as (typeof ALLOWED_EXTENSIONS)[number],
+    )
+  ) {
     throw new AppError(
-      "INVALID_FILENAME",
-      "Filename contains unsafe path characters.",
+      "UNSUPPORTED_EXTENSION",
+      `Unsupported file extension: ${sanitizedExt || "(none)"}.`,
       400,
-      ["Rename the file and upload again."],
+      ["Upload a PDF, DOCX, TXT, or Markdown file."],
     );
   }
 
   return {
-    extension,
-    safeName: makeSafeStoredFilename(originalFilename),
+    extension: sanitizedExt,
+    safeName: makeSafeStoredFilename(sanitized),
   };
 }
 

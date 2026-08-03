@@ -1,0 +1,142 @@
+[
+  {
+    "path": "README_QA_PACK.md",
+    "sha256": "ec5986e19b7192c59788e34827b9c873a45f7c1eb13ec6b7b0660a00528bd341",
+    "bytes": 1635
+  },
+  {
+    "path": "automation/CURSOR_QA_PORTFOLIO_PROMPT.txt",
+    "sha256": "4d6a4a5eac7d1910cd5bdc32e3dd0697bd7f1bac0e58f763bb439457bd57d40f",
+    "bytes": 14241
+  },
+  {
+    "path": "automation/HOW_TO_USE.txt",
+    "sha256": "8dc3a23e25fb872fa033d8cc2feefdf6d9440f7f391ec9b19261da99218e428c",
+    "bytes": 337
+  },
+  {
+    "path": "corrected_packet/Lee_Jordan_2026.pdf",
+    "sha256": "f36ad3cb718955536fb4ec9b70cf10d2bd895043402e8f6f7ae01fa2768e0c27",
+    "bytes": 5417
+  },
+  {
+    "path": "corrected_packet/Lee_Jordan_Essay.docx",
+    "sha256": "966a07054b37a361cf6530270d89f8ece40c47192a99e05c58b0bba4c844e68b",
+    "bytes": 37713
+  },
+  {
+    "path": "corrected_packet/Lee_Jordan_Recommendation.pdf",
+    "sha256": "81f47c6ccb1b803277c3db107851255fd9e0887179444a1cabe82cafce14f801",
+    "bytes": 2295
+  },
+  {
+    "path": "corrected_packet/Lee_Jordan_Resume.pdf",
+    "sha256": "02feb542f5164bdedc86f3a00d949ed89e676b88010dcc5693fa5cfe19563f6f",
+    "bytes": 2176
+  },
+  {
+    "path": "corrected_packet/Lee_Jordan_Transcript.pdf",
+    "sha256": "13f671ee1841d023330fe0feb32a0a04401cc84520cb4f7daa152608cff0207f",
+    "bytes": 2117
+  },
+  {
+    "path": "edge_cases/.._.._Jordan_Lee_Resume.pdf",
+    "sha256": "89ba514f58952ea165766da9231b7ee3f51d6af1c89753b41e338a7d0a7052b5",
+    "bytes": 1788
+  },
+  {
+    "path": "edge_cases/Conflicting_Profile_Resume.pdf",
+    "sha256": "956fde25e3796a57c657bfa3f101a7aedd79eed0a1392b17b492f37602646541",
+    "bytes": 1944
+  },
+  {
+    "path": "edge_cases/Jordan_Lee_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Very_Long_Filename_Test_Resume.pdf",
+    "sha256": "0fb87e75fc5b5f4abda51b78e728930293f5f5fc8297d0ce7b77d1a897c52e44",
+    "bytes": 1770
+  },
+  {
+    "path": "edge_cases/Recommendation_No_Signature_Text.pdf",
+    "sha256": "c21fb666ef2d26d412776bf967b280307ebebe6ed12de0bfbb61843e3034804f",
+    "bytes": 1882
+  },
+  {
+    "path": "edge_cases/corrupt_document.pdf",
+    "sha256": "641baa70f28ed33fde86cf0fdb8404dd4f7e1249fe39e154f8ef350741ae30af",
+    "bytes": 57
+  },
+  {
+    "path": "edge_cases/duplicate_essay_copy.docx",
+    "sha256": "84dfa2b9c44e14bb725905afce09daf255bb29f3a2f74160e861ac071589e578",
+    "bytes": 37752
+  },
+  {
+    "path": "edge_cases/duplicate_resume_copy.pdf",
+    "sha256": "51805086f89ed95a543eed6189cee52b153a37b0efab5280cabe779bb5c3fcd5",
+    "bytes": 2177
+  },
+  {
+    "path": "edge_cases/empty_document.txt",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": "edge_cases/invalid_mime_disguised_as_pdf.pdf",
+    "sha256": "42a41958c352639b3c8aaa0e4a9041244094af37a0b50781be909e88b4e01fbe",
+    "bytes": 61
+  },
+  {
+    "path": "edge_cases/low_text_scan_like.pdf",
+    "sha256": "c3b924acb1894ea460c1500c11d748c92e0427c49d67c700b9f80c127e31755c",
+    "bytes": 1411
+  },
+  {
+    "path": "edge_cases/unsupported_format.rtf",
+    "sha256": "1341ba3c403f6429af53edbe749616b6456a131cc24f5c69d429da259d21b557",
+    "bytes": 83
+  },
+  {
+    "path": "expected-results.json",
+    "sha256": "e41a3613c28e9b0d71617fb00e0084a4fdfad0d270993f19a2f0342611fda768",
+    "bytes": 4082
+  },
+  {
+    "path": "initial_bad_packet/Engineering_Essay_620_Words.docx",
+    "sha256": "84dfa2b9c44e14bb725905afce09daf255bb29f3a2f74160e861ac071589e578",
+    "bytes": 37752
+  },
+  {
+    "path": "initial_bad_packet/JordanLeeFinal.pdf",
+    "sha256": "28a4faf993db71d8d7d7006397a51e8d1494e969fed64de39dad2210fb45ab99",
+    "bytes": 2001
+  },
+  {
+    "path": "initial_bad_packet/Jordan_Lee_Resume.pdf",
+    "sha256": "51805086f89ed95a543eed6189cee52b153a37b0efab5280cabe779bb5c3fcd5",
+    "bytes": 2177
+  },
+  {
+    "path": "initial_bad_packet/Recommendation_Letter_Other_Scholarship.pdf",
+    "sha256": "365f8f09b25c1c1180ba6d930621f3b476e5552debdeb8dacbf3bbc339a1b054",
+    "bytes": 2262
+  },
+  {
+    "path": "requirements/future_engineers_requirements.docx",
+    "sha256": "a7a5fb45a073ff94a4fb0b0bacd738f39e9e001e48d6f76ca88ec85954a9ec19",
+    "bytes": 37309
+  },
+  {
+    "path": "requirements/future_engineers_requirements.md",
+    "sha256": "05fbff2041ab290610739fd6a1670aa3b5b0bd4ed63ed590f4062e736756ebe9",
+    "bytes": 1034
+  },
+  {
+    "path": "requirements/future_engineers_requirements.pdf",
+    "sha256": "782d480ec321b3415ae7222f2351fc11032036b1e66d8b1c3e54b8cbd2c0e8dc",
+    "bytes": 2508
+  },
+  {
+    "path": "requirements/future_engineers_requirements.txt",
+    "sha256": "488a86da8262c7679e40de6b80698d3dcee2946678f142ba660f655cb2c3ca3d",
+    "bytes": 1003
+  }
+]

@@ -25,4 +25,10 @@ describe("url fetch security", () => {
       code: "UNSUPPORTED_PROTOCOL",
     });
   });
+
+  it("blocks redirect targets that resolve to private addresses", async () => {
+    await expect(
+      assertSafePublicUrl("http://127.0.0.1/secret"),
+    ).rejects.toMatchObject({ code: "PRIVATE_IP" });
+  });
 });

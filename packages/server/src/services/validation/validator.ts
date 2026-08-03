@@ -13,6 +13,8 @@ const OTHER_ORG_HINTS = [
   "different scholarship",
   "statewide leaders scholarship",
   "horizon innovators scholarship",
+  "bright tomorrow scholarship",
+  "bright tomorrow",
 ];
 
 export class RuleDocumentValidator implements DocumentValidator {

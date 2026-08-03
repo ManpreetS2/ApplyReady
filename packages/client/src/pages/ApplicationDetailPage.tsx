@@ -15,7 +15,9 @@ import type {
 import { api } from "../lib/api";
 import { daysRemaining, formatDate, scoreTone } from "../lib/format";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { IssueBadge, MatchBadge, ReadinessBadge } from "../components/StatusBadge";
+import type { VaultDocument } from "@applyready/shared";
 
 type Tab =
   | "overview"
@@ -42,9 +44,27 @@ export function ApplicationDetailPage() {
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [validations, setValidations] = useState<ValidationResult[]>([]);
   const [report, setReport] = useState<ReadinessReport | null>(null);
+  const [vaultDocs, setVaultDocs] = useState<VaultDocument[]>([]);
+  const [pendingDeleteApp, setPendingDeleteApp] = useState(false);
+  const [pendingDeleteDoc, setPendingDeleteDoc] = useState<DocumentRecord | null>(
+    null,
+  );
+  const [profileDraft, setProfileDraft] = useState({
+    fullLegalName: "",
+    email: "",
+    phone: "",
+    school: "",
+    major: "",
+    gpa: "",
+    expectedGraduationDate: "",
+    targetOrganization: "",
+  });
 
   const load = useCallback(async () => {
-    const data = await api.getApplication(id);
+    const [data, vault] = await Promise.all([
+      api.getApplication(id),
+      api.listVault().catch(() => ({ documents: [] as VaultDocument[] })),
+    ]);
     setApplication(data.application);
     setRequirements(data.requirements);
     setDocuments(data.documents);
@@ -52,8 +72,21 @@ export function ApplicationDetailPage() {
     setMatches(data.matches);
     setConflicts(data.conflicts);
     setProfile(data.profile);
+    setVaultDocs(vault.documents);
     setActivity(data.activity);
     setValidations(data.validations);
+    if (data.profile) {
+      setProfileDraft({
+        fullLegalName: data.profile.fullLegalName || "",
+        email: data.profile.email || "",
+        phone: data.profile.phone || "",
+        school: data.profile.school || "",
+        major: data.profile.major || "",
+        gpa: data.profile.gpa || "",
+        expectedGraduationDate: data.profile.expectedGraduationDate || "",
+        targetOrganization: data.profile.targetOrganization || "",
+      });
+    }
     if (data.application.readinessScore != null && data.application.readinessStatus) {
       setReport({
         applicationId: id,
@@ -157,16 +190,7 @@ export function ApplicationDetailPage() {
           <button
             type="button"
             className="btn-danger"
-            onClick={async () => {
-              if (
-                !confirm(
-                  "Delete this application and associated local files? This cannot be undone.",
-                )
-              )
-                return;
-              await api.deleteApplication(id);
-              navigate("/dashboard");
-            }}
+            onClick={() => setPendingDeleteApp(true)}
           >
             Delete application
           </button>
@@ -221,8 +245,14 @@ export function ApplicationDetailPage() {
           <div className="card space-y-3 p-6">
             <h2 className="font-display text-2xl font-semibold">Checklist</h2>
             <p>
-              Required requirements:{" "}
-              {requirements.filter((r) => r.required && r.category !== "other").length}
+                      Required requirements:{" "}
+                      {requirements.filter(
+                        (r) =>
+                          r.required &&
+                          r.category !== "other" &&
+                          r.category !== "proof_of_eligibility" &&
+                          r.category !== "proof_of_enrollment",
+                      ).length}
             </p>
             <p>Documents uploaded: {documents.length}</p>
             <p>Blocking issues: {blocking.length}</p>
@@ -249,7 +279,14 @@ export function ApplicationDetailPage() {
                       {req.userConfirmed ? "Confirmed" : "Needs confirmation"}
                     </p>
                   </div>
-                  {match ? <MatchBadge status={match.status} /> : (
+                  {match ? (
+                    <MatchBadge status={match.status} />
+                  ) : req.category === "proof_of_eligibility" ||
+                    req.category === "proof_of_enrollment" ? (
+                    <span className="status-pill bg-sand-100 text-ink-700 dark:bg-ink-800 dark:text-ink-100">
+                      Eligibility check
+                    </span>
+                  ) : (
                     <span className="status-pill bg-rose-100 text-danger-600">Missing</span>
                   )}
                 </div>
@@ -302,6 +339,8 @@ export function ApplicationDetailPage() {
                       Confirm match
                     </button>
                   ) : null}
+                  {req.category !== "proof_of_eligibility" &&
+                  req.category !== "proof_of_enrollment" ? (
                   <label className="btn-ghost">
                     Assign document
                     <select
@@ -323,6 +362,11 @@ export function ApplicationDetailPage() {
                       ))}
                     </select>
                   </label>
+                  ) : (
+                    <p className="text-sm text-ink-500">
+                      Validated from profile and document facts—no separate upload required.
+                    </p>
+                  )}
                 </div>
               </article>
             );
@@ -332,7 +376,7 @@ export function ApplicationDetailPage() {
 
       {tab === "documents" && (
         <section className="space-y-4">
-          <div className="card p-4">
+          <div className="card space-y-4 p-4">
             <label className="label" htmlFor="more-docs">
               Upload more documents
             </label>
@@ -354,15 +398,48 @@ export function ApplicationDetailPage() {
                   setError(err);
                 } finally {
                   setBusy(false);
+                  e.target.value = "";
                 }
               }}
             />
+            {vaultDocs.length > 0 ? (
+              <label className="block">
+                <span className="label">Attach from document vault</span>
+                <select
+                  className="input"
+                  defaultValue=""
+                  aria-label="Attach from document vault"
+                  onChange={async (e) => {
+                    if (!e.target.value) return;
+                    setBusy(true);
+                    try {
+                      await api.useVault(id, e.target.value);
+                      await load();
+                    } catch (err) {
+                      setError(err);
+                    } finally {
+                      setBusy(false);
+                      e.target.value = "";
+                    }
+                  }}
+                >
+                  <option value="" disabled>
+                    Choose a vault document…
+                  </option>
+                  {vaultDocs.map((doc) => (
+                    <option key={doc.id} value={doc.id}>
+                      {doc.originalFilename} ({doc.category})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
           </div>
           {documents.map((doc) => (
             <article key={doc.id} className="card p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="font-display text-xl font-semibold">
+                <div className="min-w-0">
+                  <h2 className="font-display text-xl font-semibold break-all">
                     {doc.originalFilename}
                   </h2>
                   <p className="text-sm text-ink-500">
@@ -374,11 +451,7 @@ export function ApplicationDetailPage() {
                 <button
                   type="button"
                   className="btn-danger"
-                  onClick={async () => {
-                    if (!confirm(`Delete ${doc.originalFilename}?`)) return;
-                    await api.deleteDocument(doc.id);
-                    await load();
-                  }}
+                  onClick={() => setPendingDeleteDoc(doc)}
                 >
                   Delete
                 </button>
@@ -463,26 +536,49 @@ export function ApplicationDetailPage() {
               Candidate values are extracted from documents. Confirm them yourself—ApplyReady
               does not silently choose between conflicts.
             </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(
+                [
+                  ["fullLegalName", "Full legal name"],
+                  ["email", "Email"],
+                  ["phone", "Phone"],
+                  ["school", "School"],
+                  ["major", "Major"],
+                  ["gpa", "GPA"],
+                  ["expectedGraduationDate", "Expected graduation"],
+                  ["targetOrganization", "Target organization"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="block">
+                  <span className="label">{label}</span>
+                  <input
+                    className="input"
+                    value={profileDraft[key]}
+                    onChange={(e) =>
+                      setProfileDraft((prev) => ({ ...prev, [key]: e.target.value }))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={async () => {
+                try {
+                  const res = await api.updateProfile(id, profileDraft);
+                  setProfile(res.profile);
+                } catch (err) {
+                  setError(err);
+                }
+              }}
+            >
+              Save profile
+            </button>
             {profile ? (
-              <dl className="grid gap-3 sm:grid-cols-2">
-                {(
-                  [
-                    ["Full legal name", profile.fullLegalName],
-                    ["Email", profile.email],
-                    ["Phone", profile.phone],
-                    ["School", profile.school],
-                    ["Major", profile.major],
-                    ["GPA", profile.gpa],
-                    ["Expected graduation", profile.expectedGraduationDate],
-                    ["Target organization", profile.targetOrganization],
-                  ] as const
-                ).map(([label, value]) => (
-                  <div key={label}>
-                    <dt className="text-xs uppercase tracking-wide text-ink-500">{label}</dt>
-                    <dd className="font-medium">{value || "—"}</dd>
-                  </div>
-                ))}
-              </dl>
+              <p className="text-xs text-ink-500">
+                Last saved profile values remain local to this application.
+              </p>
             ) : null}
           </div>
           {conflicts.map((conflict) => (
@@ -492,7 +588,7 @@ export function ApplicationDetailPage() {
               </h3>
               <ul className="space-y-2 text-sm">
                 {conflict.values.map((v) => (
-                  <li key={`${v.source}-${v.value}`} className="evidence">
+                  <li key={`${v.source}-${v.value}`} className="evidence break-words">
                     {v.source}: {v.value}
                   </li>
                 ))}
@@ -582,6 +678,37 @@ export function ApplicationDetailPage() {
           </ol>
         </section>
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteApp}
+        title="Delete application?"
+        description="Delete this application and associated local files? This cannot be undone."
+        confirmLabel="Delete application"
+        danger
+        onCancel={() => setPendingDeleteApp(false)}
+        onConfirm={async () => {
+          await api.deleteApplication(id);
+          navigate("/dashboard");
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(pendingDeleteDoc)}
+        title="Delete document?"
+        description={
+          pendingDeleteDoc
+            ? `Delete ${pendingDeleteDoc.originalFilename}?`
+            : null
+        }
+        confirmLabel="Delete document"
+        danger
+        onCancel={() => setPendingDeleteDoc(null)}
+        onConfirm={async () => {
+          if (!pendingDeleteDoc) return;
+          await api.deleteDocument(pendingDeleteDoc.id);
+          setPendingDeleteDoc(null);
+          await load();
+        }}
+      />
     </div>
   );
 }
