@@ -59,6 +59,11 @@ const child = spawn(process.execPath, [serverEntry], {
     APPLYREADY_UPLOADS_DIR: uploadsDir,
     APPLYREADY_DB_PATH: dbPath,
     APPLYREADY_CLIENT_DIST: clientDist,
+    PUBLIC_DEMO_MODE: process.env.PUBLIC_DEMO_MODE || "",
+    PUBLIC_DEMO_TTL_HOURS: process.env.PUBLIC_DEMO_TTL_HOURS || "6",
+    APPLYREADY_DISABLE_RATE_LIMIT:
+      process.env.APPLYREADY_DISABLE_RATE_LIMIT || "true",
+    APPLYREADY_E2E: "true",
   },
   stdio: "inherit",
 });

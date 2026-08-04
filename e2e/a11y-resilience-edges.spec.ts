@@ -11,6 +11,8 @@ test.beforeEach(async ({ request }) => {
 
 test("keyboard navigation and dialog focus behavior", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByRole("link", { name: "Open dashboard" })).toBeVisible();
+  await page.locator("body").focus();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
   await page.keyboard.press("Enter");

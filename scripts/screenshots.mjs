@@ -94,7 +94,7 @@ try {
 
   // Seed not-ready and ready apps via API for stable screenshots
   const text = fs.readFileSync(
-    path.join(fixtures, "requirements/future_engineers_requirements.txt"),
+    path.join(fixtures, "requirements/scholarship-requirements.txt"),
     "utf8",
   );
   const badApp = await api("/api/applications", {

@@ -63,7 +63,7 @@ test("printable report excludes raw dumps and exports PDF", async ({
     deadline: "2026-10-15",
   });
   const text = fs.readFileSync(
-    fixturePath("requirements/future_engineers_requirements.txt"),
+    fixturePath("requirements/scholarship-requirements.txt"),
     "utf8",
   );
   await request.post(`/api/applications/${app.id}/sources/text`, {

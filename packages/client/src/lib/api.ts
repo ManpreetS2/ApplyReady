@@ -47,9 +47,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ ok: boolean }>("/api/health"),
   storage: () =>
-    request<{ dataDir: string; uploadsDir: string; dbPath: string; privacy: string }>(
-      "/api/settings/storage",
-    ),
+    request<{
+      dataDir?: string;
+      uploadsDir?: string;
+      dbPath?: string;
+      privacy: string;
+      publicDemoMode?: boolean;
+    }>("/api/settings/storage"),
+  config: () =>
+    request<{ publicDemoMode: boolean; mode: string }>("/api/config"),
   clearAll: () =>
     request<{ ok: boolean }>("/api/settings/clear-all", { method: "DELETE" }),
   listApplications: () =>

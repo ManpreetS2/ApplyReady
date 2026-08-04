@@ -7,6 +7,7 @@ import { analyzeApplication } from "../analysis/analyze.js";
 import { processUploadedDocument } from "../documents/process.js";
 import { ingestPastedText } from "../requirements/ingest.js";
 import { computeReadiness } from "../readiness/score.js";
+import { cleanupStaleDemoApplications } from "./cleanup.js";
 import {
   DEMO_REQUIREMENTS_TEXT,
   buildDemoEssayPdf,
@@ -167,12 +168,12 @@ async function confirmLikelyMatches(db: Database.Database, applicationId: string
 export async function startGuidedDemo(db: Database.Database) {
   const repos = new Repositories(db);
 
-  // Remove previous demos
-  for (const app of repos.listApplications().filter((a) => a.isDemo)) {
-    const docs = repos.deleteApplication(app.id);
-    for (const doc of docs) {
-      deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
-    }
+  // Opportunistic cleanup of expired demos only — never delete active visitor demos.
+  try {
+    cleanupStaleDemoApplications(db);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.error(`[applyready] opportunistic demo cleanup failed: ${message}`);
   }
 
   const app = repos.createApplication({

@@ -3,10 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const port = Number(process.env.APPLYREADY_E2E_PORT || 8791);
+const port = Number(process.env.APPLYREADY_PUBLIC_DEMO_E2E_PORT || 8792);
 const tmpRoot =
-  process.env.APPLYREADY_E2E_TMP ||
-  fs.mkdtempSync(path.join(os.tmpdir(), "applyready-e2e-"));
+  process.env.APPLYREADY_PUBLIC_DEMO_E2E_TMP ||
+  fs.mkdtempSync(path.join(os.tmpdir(), "applyready-public-demo-e2e-"));
 const dataDir = path.join(tmpRoot, "data");
 const uploadsDir = path.join(tmpRoot, "uploads");
 const dbPath = path.join(dataDir, "e2e.sqlite");
@@ -14,27 +14,28 @@ const dbPath = path.join(dataDir, "e2e.sqlite");
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(uploadsDir, { recursive: true });
 
-process.env.APPLYREADY_E2E_TMP = tmpRoot;
+process.env.APPLYREADY_PUBLIC_DEMO_E2E_TMP = tmpRoot;
 process.env.APPLYREADY_DATA_DIR = dataDir;
 process.env.APPLYREADY_UPLOADS_DIR = uploadsDir;
 process.env.APPLYREADY_DB_PATH = dbPath;
+process.env.PUBLIC_DEMO_MODE = "true";
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: "./e2e-public-demo",
   fullyParallel: false,
   workers: 1,
-  timeout: 120_000,
-  expect: { timeout: 15_000 },
+  timeout: 180_000,
+  expect: { timeout: 20_000 },
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
-  outputDir: "test-results",
+  reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report-public-demo" }]],
+  outputDir: "test-results-public-demo",
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
-    actionTimeout: 15_000,
+    actionTimeout: 20_000,
   },
   projects: [
     {
@@ -42,7 +43,6 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
-        channel: undefined,
       },
     },
     {
@@ -53,8 +53,8 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
       },
-      testMatch: /a11y-resilience-edges\.spec\.ts/,
-      grep: /keyboard navigation|status communicated|refresh resilience/,
+      testMatch: /public-demo\.spec\.ts/,
+      grep: /mobile viewport|keyboard navigation/,
     },
   ],
   webServer: {
@@ -67,11 +67,12 @@ export default defineConfig({
       PORT: String(port),
       HOST: "127.0.0.1",
       NODE_ENV: "production",
-      PUBLIC_DEMO_MODE: "",
+      PUBLIC_DEMO_MODE: "true",
+      PUBLIC_DEMO_TTL_HOURS: "6",
       APPLYREADY_DATA_DIR: dataDir,
       APPLYREADY_UPLOADS_DIR: uploadsDir,
       APPLYREADY_DB_PATH: dbPath,
-      APPLYREADY_E2E_TMP: tmpRoot,
+      APPLYREADY_PUBLIC_DEMO_E2E_TMP: tmpRoot,
       APPLYREADY_DISABLE_RATE_LIMIT: "true",
       APPLYREADY_E2E: "true",
     },

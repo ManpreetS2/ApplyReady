@@ -28,7 +28,7 @@ test("initial bad packet is Not ready with expected issue themes", async ({
   });
   await apiSetProfile(request, app.id);
   const text = fs.readFileSync(
-    fixturePath("requirements/future_engineers_requirements.txt"),
+    fixturePath("requirements/scholarship-requirements.txt"),
     "utf8",
   );
   const requirements = await apiAddTextSource(request, app.id, text);
@@ -75,7 +75,7 @@ test("corrected packet can reach Ready to submit after confirmations", async ({
   });
   await apiSetProfile(request, app.id);
   const text = fs.readFileSync(
-    fixturePath("requirements/future_engineers_requirements.txt"),
+    fixturePath("requirements/scholarship-requirements.txt"),
     "utf8",
   );
   const requirements = await apiAddTextSource(request, app.id, text);

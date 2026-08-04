@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, tests, build, E2E, public demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Initialize database schema
+        run: npm run db:init
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Integration tests
+        run: npm run test:integration
+
+      - name: Production build
+        run: npm run build
+
+      - name: Local-mode Playwright E2E
+        run: npm run test:e2e
+
+      - name: Public-demo verification smoke
+        run: npm run verify:public-demo
+
+      - name: Public-demo Playwright E2E
+        run: npm run test:e2e:public-demo
+
+  docker-public-demo:
+    name: Docker public-demo build and smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: verify
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build public-demo image
+        run: docker build -t applyready-public-demo:ci .
+
+      - name: Start public-demo container
+        run: |
+          docker run -d \
+            --name applyready-public-demo-ci \
+            -e PUBLIC_DEMO_MODE=true \
+            -e NODE_ENV=production \
+            -e HOST=0.0.0.0 \
+            -e PORT=8787 \
+            -e APPLYREADY_DATA_DIR=/tmp/applyready-data \
+            -e APPLYREADY_UPLOADS_DIR=/tmp/applyready-uploads \
+            -e APPLYREADY_DB_PATH=/tmp/applyready-data/applyready.sqlite \
+            -e PUBLIC_DEMO_TTL_HOURS=6 \
+            -p 8787:8787 \
+            applyready-public-demo:ci
+
+      - name: Smoke test container API
+        run: |
+          APPLYREADY_SMOKE_BASE_URL=http://127.0.0.1:8787 \
+            node scripts/ci-public-demo-smoke.mjs
+
+      - name: Print container logs on failure
+        if: failure()
+        run: docker logs applyready-public-demo-ci | sed -E 's#(/[A-Za-z0-9._-]+){2,}#[path]#g' || true
+
+      - name: Remove container
+        if: always()
+        run: |
+          docker rm -f applyready-public-demo-ci || true

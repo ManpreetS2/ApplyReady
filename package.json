@@ -6,6 +6,15 @@
   "workspaces": [
     "packages/*"
   ],
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.1",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "license": "MIT",
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"npm run dev -w @applyready/server\" \"npm run dev -w @applyready/client\"",
     "dev:server": "npm run dev -w @applyready/server",
@@ -16,6 +25,7 @@
     "test:integration": "npm run test:integration -w @applyready/server",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
+    "test:e2e:public-demo": "playwright test --config=playwright.public-demo.config.ts",
     "build": "npm run build -w @applyready/shared && npm run build -w @applyready/client && npm run build -w @applyready/server",
     "start": "npm run start -w @applyready/server",
     "db:init": "npm run db:init -w @applyready/server",
@@ -23,15 +33,9 @@
     "db:reset": "npm run db:reset -w @applyready/server",
     "screenshots": "node scripts/screenshots.mjs",
     "demo:record": "node scripts/record-demo.mjs",
-    "qa": "npm run typecheck && npm run test:unit && npm run test:integration && npm run build && npm run test:e2e"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.50.1",
-    "concurrently": "^9.1.2",
-    "typescript": "^5.7.3"
-  },
-  "license": "MIT"
+    "verify:public-demo": "node scripts/verify-public-demo.mjs",
+    "smoke:public-demo": "node scripts/ci-public-demo-smoke.mjs",
+    "qa": "npm run typecheck && npm run test:unit && npm run test:integration && npm run build && npm run test:e2e",
+    "qa:public-demo": "npm run typecheck && npm run test:unit && npm run test:integration && npm run build && npm run verify:public-demo && npm run test:e2e:public-demo"
+  }
 }

@@ -20,9 +20,14 @@ import {
   MAX_UPLOAD_BYTES,
 } from "@applyready/shared";
 import type Database from "better-sqlite3";
+import type { Application } from "@applyready/shared";
 import { config } from "../config.js";
 import { Repositories } from "../db/repositories.js";
 import { asyncHandler, requireApp } from "../middleware/errorHandler.js";
+import {
+  publicDemoGuard,
+  requirePublicDemoApplication,
+} from "../middleware/publicDemo.js";
 import { AppError } from "../utils/errors.js";
 import {
   deleteFileQuietly,
@@ -50,14 +55,37 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
 });
 
+function loadApplicationForRead(
+  repos: Repositories,
+  id: string,
+): Application {
+  const application = requireApp(repos, id) as Application;
+  if (config.publicDemoMode) {
+    return requirePublicDemoApplication(application);
+  }
+  return application;
+}
+
 export function createApiRouter(db: Database.Database): Router {
   const router = Router();
   const repos = new Repositories(db);
 
+  router.use(publicDemoGuard);
+
   router.get("/health", (_req, res) => {
+    if (config.publicDemoMode) {
+      res.json({
+        ok: true,
+        service: "ApplyReady",
+        mode: "public-demo",
+        time: new Date().toISOString(),
+      });
+      return;
+    }
     res.json({
       ok: true,
       service: "ApplyReady",
+      mode: "local",
       time: new Date().toISOString(),
       storage: {
         dataDir: config.dataDir,
@@ -67,7 +95,22 @@ export function createApiRouter(db: Database.Database): Router {
     });
   });
 
+  router.get("/config", (_req, res) => {
+    res.json({
+      publicDemoMode: config.publicDemoMode,
+      mode: config.publicDemoMode ? "public-demo" : "local",
+    });
+  });
+
   router.get("/settings/storage", (_req, res) => {
+    if (config.publicDemoMode) {
+      res.json({
+        publicDemoMode: true,
+        privacy:
+          "This hosted portfolio demo uses generated fictional documents only. Real uploads are disabled. Demo data is temporary and automatically removed. No account is created.",
+      });
+      return;
+    }
     res.json({
       dataDir: config.dataDir,
       uploadsDir: config.uploadsDir,
@@ -124,7 +167,7 @@ export function createApiRouter(db: Database.Database): Router {
   router.get(
     "/applications/:id",
     asyncHandler(async (req, res) => {
-      const application = requireApp(repos, req.params.id!);
+      const application = loadApplicationForRead(repos, req.params.id!);
       res.json({
         application,
         requirements: repos.listRequirements(req.params.id!),
@@ -167,9 +210,7 @@ export function createApiRouter(db: Database.Database): Router {
     "/applications/:id/export",
     asyncHandler(async (req, res) => {
       const id = req.params.id!;
-      const application = requireApp(repos, id) as ReturnType<
-        typeof repos.getApplication
-      >;
+      const application = loadApplicationForRead(repos, id);
       const report = {
         application,
         requirements: repos.listRequirements(id),

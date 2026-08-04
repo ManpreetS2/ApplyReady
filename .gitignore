@@ -44,7 +44,9 @@ Thumbs.db
 packages/server/test-data/
 packages/server/tmp/
 test-results/
+test-results-public-demo/
 playwright-report/
+playwright-report-public-demo/
 blob-report/
 playwright/.cache/
 tmp/
@@ -53,3 +55,6 @@ docs/demo/RECORDING_BLOCKER.txt
 # Browser profiles / local automation junk
 **/chrome-user-data/
 **/browser-profile/
+
+# Local source QA pack (fictional originals; tracked copies live under qa/fixtures/)
+ApplyReady_QA_Pack/
