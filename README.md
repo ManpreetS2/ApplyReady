@@ -1,5 +1,7 @@
 # ApplyReady
 
+[![CI](https://github.com/ManpreetS2/applyready/actions/workflows/ci.yml/badge.svg)](https://github.com/ManpreetS2/applyready/actions/workflows/ci.yml)
+
 **Know what’s missing before you press submit.**
 
 Applicants often submit incomplete, inconsistent, or incorrectly formatted application packets: a missing transcript, an essay over the word limit, a recommendation addressed to the wrong organization, or a filename that breaks the required pattern.
@@ -8,13 +10,33 @@ Applicants often submit incomplete, inconsistent, or incorrectly formatted appli
 
 **Proof:** the fictional Future Engineers Scholarship guided demo progresses from **Not ready** to **Ready to submit** using the same deterministic pipelines as real packets.
 
-**Privacy:** ApplyReady runs locally. The Express API stores metadata in a local SQLite database and uploaded files in a local upload directory on the machine running the app. Documents are not sent to hosted AI services, analytics, or cloud storage.
+**Privacy:** ApplyReady runs locally by default. The Express API stores metadata in a local SQLite database and uploaded files in a local upload directory on the machine running the app. Documents are not sent to hosted AI services, analytics, or cloud storage.
 
 **Limitations:** no OCR (image-only PDFs may need conversion to searchable PDFs); signature checks are text-only; rule-based results may require confirmation; webpage extraction does not execute JavaScript; physical-device testing has not been completed.
 
-> ApplyReady does not provide legal, immigration, financial, or professional compliance advice.
+> ApplyReady does not provide legal, immigration, financial, admissions, or professional compliance advice.
 
 ![ApplyReady landing page](docs/screenshots/landing-page.png)
+
+## Public interactive demo
+
+Hosted portfolio demo URL (set after deployment; not live yet): `PUBLIC_DEMO_URL`
+
+The hosted demo uses **generated fictional documents only** and is **not intended for private or sensitive information**. Real uploads, vault storage, arbitrary URL fetching, and global data deletion are disabled.
+
+Independent concurrent demo sessions use unpredictable UUID application IDs. There are **no accounts** and **no authenticated private sessions**. Knowing a demo ID is enough to read that fictional temporary demo; IDs are not listed by any public endpoint. Stale demos are cleaned up automatically after a configurable TTL (default 6 hours).
+
+| | Public demo mode | Full local mode |
+|--|------------------|-----------------|
+| Purpose | Recruiter walkthrough | Complete personal use |
+| Uploads / vault / URL fetch | Disabled | Enabled |
+| Concurrent visitors | Independent demo sessions (unpredictable IDs) | Single-machine local data |
+| Accounts / auth | None | None (local machine trust) |
+| Storage paths in UI/API | Hidden | Shown on Privacy page |
+
+Security model and Docker instructions: [docs/PUBLIC_DEMO_DEPLOYMENT.md](docs/PUBLIC_DEMO_DEPLOYMENT.md).
+
+Do **not** upload real personal documents to the hosted demo.
 
 ## Why this project matters
 
@@ -175,9 +197,12 @@ npm run test:unit
 npm run test:integration
 npm run test:e2e
 npm run test:e2e:headed
+npm run test:e2e:public-demo
 npm run build
 npm start
 npm run qa
+npm run verify:public-demo
+npm run qa:public-demo
 npm run screenshots
 npm run demo:record
 npm run db:init
@@ -187,11 +212,15 @@ npm run db:reset
 
 `npm run qa` runs typecheck, unit tests, integration tests, production build, and Playwright E2E against an isolated temporary database/upload directory.
 
+`npm run qa:public-demo` additionally verifies public-demo lockdown and Playwright coverage with `PUBLIC_DEMO_MODE=true`.
+
 ## Testing summary
 
 - Unit: requirement extraction, document parsing/classification, matching/validation, URL SSRF protections
-- Integration: API lifecycle, guided demo, fictional QA fixture pack (bad → ready, edge cases)
+- Integration: API lifecycle, guided demo, fictional QA fixture pack (bad → ready, edge cases), public-demo security and concurrency
 - E2E: core lifecycle, requirements formats, bad/corrected packets, vault, report PDF, keyboard accessibility, refresh resilience, dashboard filters, edge uploads
+- Public-demo E2E: banner, restricted navigation, guided demo to Ready to submit, report, reset, dual-context independent sessions
+- `npm run verify:public-demo`: production smoke for public-demo mode
 
 Fictional fixtures live in `qa/fixtures/applyready/` and must not be copied into runtime `uploads/` by default. See `docs/QA_REPORT.md` for the latest verification record.
 
@@ -204,6 +233,8 @@ npm start
 
 Open `http://127.0.0.1:8787`.
 
+Docker public demo: see [docs/PUBLIC_DEMO_DEPLOYMENT.md](docs/PUBLIC_DEMO_DEPLOYMENT.md).
+
 ## Known limitations
 
 - OCR is not included; image-only scans need conversion to searchable PDFs
@@ -213,6 +244,8 @@ Open `http://127.0.0.1:8787`.
 - Wizard progress is in-memory in the browser; refreshing the new-application wizard returns to step 1 with an honest reset (no false Ready state)
 - Not a substitute for official checklist review
 - Physical-device testing is out of scope unless separately performed
+- Hosted public demo disables real uploads; it is not equivalent to full local mode
+- Independent concurrent demos use unpredictable IDs without accounts; not authenticated private sessions or multi-user SaaS
 
 ## Future improvements
 

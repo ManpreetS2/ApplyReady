@@ -13,6 +13,7 @@ import type {
   ValidationResult,
 } from "@applyready/shared";
 import { api } from "../lib/api";
+import { useConfig } from "../lib/config";
 import { daysRemaining, formatDate, scoreTone } from "../lib/format";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -31,6 +32,8 @@ type Tab =
 export function ApplicationDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const { publicDemoMode } = useConfig();
+  const readOnly = publicDemoMode;
   const [tab, setTab] = useState<Tab>("overview");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -61,10 +64,10 @@ export function ApplicationDetailPage() {
   });
 
   const load = useCallback(async () => {
-    const [data, vault] = await Promise.all([
-      api.getApplication(id),
-      api.listVault().catch(() => ({ documents: [] as VaultDocument[] })),
-    ]);
+    const data = await api.getApplication(id);
+    const vault = readOnly
+      ? { documents: [] as VaultDocument[] }
+      : await api.listVault().catch(() => ({ documents: [] as VaultDocument[] }));
     setApplication(data.application);
     setRequirements(data.requirements);
     setDocuments(data.documents);
@@ -112,7 +115,7 @@ export function ApplicationDetailPage() {
         generatedAt: data.application.lastAnalyzedAt || new Date().toISOString(),
       });
     }
-  }, [id]);
+  }, [id, readOnly]);
 
   useEffect(() => {
     setBusy(true);
@@ -181,19 +184,27 @@ export function ApplicationDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn-primary" disabled={busy} onClick={analyze}>
-            Reanalyze
-          </button>
+          {!readOnly ? (
+            <button type="button" className="btn-primary" disabled={busy} onClick={analyze}>
+              Reanalyze
+            </button>
+          ) : (
+            <Link to="/demo" className="btn-primary">
+              Back to guided demo
+            </Link>
+          )}
           <Link to={`/applications/${id}/report`} className="btn-secondary">
             Printable report
           </Link>
-          <button
-            type="button"
-            className="btn-danger"
-            onClick={() => setPendingDeleteApp(true)}
-          >
-            Delete application
-          </button>
+          {!readOnly ? (
+            <button
+              type="button"
+              className="btn-danger"
+              onClick={() => setPendingDeleteApp(true)}
+            >
+              Delete application
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -312,7 +323,7 @@ export function ApplicationDetailPage() {
                   </ul>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
-                  {!req.userConfirmed ? (
+                  {!readOnly && !req.userConfirmed ? (
                     <button
                       type="button"
                       className="btn-secondary"
@@ -324,7 +335,7 @@ export function ApplicationDetailPage() {
                       Confirm requirement
                     </button>
                   ) : null}
-                  {match && !match.userConfirmed ? (
+                  {!readOnly && match && !match.userConfirmed ? (
                     <button
                       type="button"
                       className="btn-secondary"
@@ -339,7 +350,8 @@ export function ApplicationDetailPage() {
                       Confirm match
                     </button>
                   ) : null}
-                  {req.category !== "proof_of_eligibility" &&
+                  {!readOnly &&
+                  req.category !== "proof_of_eligibility" &&
                   req.category !== "proof_of_enrollment" ? (
                   <label className="btn-ghost">
                     Assign document
@@ -362,13 +374,13 @@ export function ApplicationDetailPage() {
                       ))}
                     </select>
                   </label>
-                  ) : (
+                  ) : req.category === "proof_of_eligibility" ||
+                    req.category === "proof_of_enrollment" ? (
                     <p className="text-sm text-ink-500">
                       Validated from profile and document facts—no separate upload required.
                     </p>
-                  )}
-                </div>
-              </article>
+                  ) : null}
+                </div>              </article>
             );
           })}
         </section>
@@ -376,6 +388,7 @@ export function ApplicationDetailPage() {
 
       {tab === "documents" && (
         <section className="space-y-4">
+          {!readOnly ? (
           <div className="card space-y-4 p-4">
             <label className="label" htmlFor="more-docs">
               Upload more documents
@@ -435,6 +448,11 @@ export function ApplicationDetailPage() {
               </label>
             ) : null}
           </div>
+          ) : (
+            <p className="card p-4 text-sm text-ink-600 dark:text-ink-300">
+              Read-only demo evidence — uploads are disabled in the public portfolio demo.
+            </p>
+          )}
           {documents.map((doc) => (
             <article key={doc.id} className="card p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -448,6 +466,7 @@ export function ApplicationDetailPage() {
                     {doc.pageCount != null ? ` · ${doc.pageCount} pages` : ""}
                   </p>
                 </div>
+                {!readOnly ? (
                 <button
                   type="button"
                   className="btn-danger"
@@ -455,6 +474,7 @@ export function ApplicationDetailPage() {
                 >
                   Delete
                 </button>
+                ) : null}
               </div>
               {doc.parsingWarnings.length ? (
                 <ul className="mt-3 list-disc pl-5 text-sm text-warn-600">
@@ -498,7 +518,7 @@ export function ApplicationDetailPage() {
                 </p>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                {issue.status === "open" ? (
+                {!readOnly && issue.status === "open" ? (
                   <button
                     type="button"
                     className="btn-secondary"
@@ -510,7 +530,7 @@ export function ApplicationDetailPage() {
                     Mark resolved
                   </button>
                 ) : null}
-                {issue.status === "open" && issue.dismissible ? (
+                {!readOnly && issue.status === "open" && issue.dismissible ? (
                   <button
                     type="button"
                     className="btn-ghost"
@@ -522,8 +542,7 @@ export function ApplicationDetailPage() {
                     Dismiss
                   </button>
                 ) : null}
-              </div>
-            </article>
+              </div>            </article>
           ))}
         </section>
       )}
@@ -554,6 +573,7 @@ export function ApplicationDetailPage() {
                   <input
                     className="input"
                     value={profileDraft[key]}
+                    disabled={readOnly}
                     onChange={(e) =>
                       setProfileDraft((prev) => ({ ...prev, [key]: e.target.value }))
                     }
@@ -561,6 +581,7 @@ export function ApplicationDetailPage() {
                 </label>
               ))}
             </div>
+            {!readOnly ? (
             <button
               type="button"
               className="btn-secondary"
@@ -575,7 +596,7 @@ export function ApplicationDetailPage() {
             >
               Save profile
             </button>
-            {profile ? (
+            ) : null}            {profile ? (
               <p className="text-xs text-ink-500">
                 Last saved profile values remain local to this application.
               </p>
@@ -594,6 +615,9 @@ export function ApplicationDetailPage() {
                 ))}
               </ul>
               {!conflict.resolved ? (
+                readOnly ? (
+                  <p className="text-sm text-ink-500">Open conflict (read-only in public demo).</p>
+                ) : (
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -616,6 +640,7 @@ export function ApplicationDetailPage() {
                     Mark as real mismatch
                   </button>
                 </div>
+                )
               ) : (
                 <p className="text-sm">
                   Resolved · {conflict.equivalent ? "treated as equivalent" : "mismatch confirmed"}

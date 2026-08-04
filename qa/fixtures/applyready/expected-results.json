@@ -4,7 +4,7 @@
   "fictional_data_only": true,
   "requirements_sources": [
     {
-      "file": "requirements/future_engineers_requirements.txt",
+      "file": "requirements/scholarship-requirements.txt",
       "expected": "Extract required resume PDF, transcript, 400-500 word essay, one recommendation, exact filename rule, deadline, GPA, enrollment, optional portfolio."
     },
     {

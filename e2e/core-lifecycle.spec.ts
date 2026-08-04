@@ -24,7 +24,7 @@ test("core application lifecycle through UI", async ({ page }) => {
   await page.getByRole("button", { name: "Continue" }).click();
 
   const requirementsText = fs.readFileSync(
-    fixturePath("requirements/future_engineers_requirements.txt"),
+    fixturePath("requirements/scholarship-requirements.txt"),
     "utf8",
   );
   await page.getByLabel("Requirements text").fill(requirementsText);
@@ -62,7 +62,7 @@ test("core application lifecycle through UI", async ({ page }) => {
 
 test("requirements formats include evidence", async ({ page, request }) => {
   const files = [
-    "future_engineers_requirements.txt",
+    "scholarship-requirements.txt",
     "future_engineers_requirements.md",
     "future_engineers_requirements.pdf",
     "future_engineers_requirements.docx",

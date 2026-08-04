@@ -2,10 +2,12 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { Application, Issue, ReadinessReport } from "@applyready/shared";
 import { api } from "../lib/api";
+import { useConfig } from "../lib/config";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { IssueBadge, ReadinessBadge } from "../components/StatusBadge";
 
 export function DemoPage() {
+  const { publicDemoMode } = useConfig();
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [application, setApplication] = useState<Application | null>(null);
@@ -65,6 +67,9 @@ export function DemoPage() {
         <p className="mt-2 max-w-3xl text-ink-600 dark:text-ink-300">
           Future Engineers Scholarship — a recruiter-friendly walkthrough that uses the real
           extraction, matching, validation, and readiness pipelines.
+          {publicDemoMode
+            ? " All documents are fictional and generated for this portfolio demo."
+            : ""}
         </p>
       </div>
 
@@ -120,25 +125,27 @@ export function DemoPage() {
               >
                 Next step
               </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    const res = await api.analyze(application.id);
-                    setReport(res.report);
-                    setIssues(res.issues);
-                  } catch (e) {
-                    setError(e);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                Reanalyze
-              </button>
+              {!publicDemoMode ? (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      const res = await api.analyze(application.id);
+                      setReport(res.report);
+                      setIssues(res.issues);
+                    } catch (e) {
+                      setError(e);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Reanalyze
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="btn-ghost"
@@ -150,9 +157,17 @@ export function DemoPage() {
               <Link to={`/applications/${application.id}`} className="btn-ghost">
                 View evidence
               </Link>
-              <Link to="/dashboard" className="btn-ghost">
-                Return to dashboard
+              <Link
+                to={`/applications/${application.id}/report`}
+                className="btn-ghost"
+              >
+                Open report
               </Link>
+              {!publicDemoMode ? (
+                <Link to="/dashboard" className="btn-ghost">
+                  Return to dashboard
+                </Link>
+              ) : null}
             </div>
             {done ? (
               <p className="rounded-xl bg-accent-100 px-4 py-3 text-accent-900 dark:bg-accent-900/40 dark:text-accent-100">

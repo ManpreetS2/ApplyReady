@@ -41,6 +41,18 @@ export class Repositories {
       .map((r) => mapApplication(r as Record<string, unknown>));
   }
 
+  /** Demo applications with updated_at strictly before cutoffIso (ISO-8601). */
+  listStaleDemoApplications(cutoffIso: string): Application[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM applications
+         WHERE is_demo = 1 AND updated_at < ?
+         ORDER BY updated_at ASC`,
+      )
+      .all(cutoffIso)
+      .map((r) => mapApplication(r as Record<string, unknown>));
+  }
+
   getApplication(id: string): Application | null {
     const row = this.db
       .prepare("SELECT * FROM applications WHERE id = ?")
@@ -149,6 +161,24 @@ export class Repositories {
         id,
       );
     return this.getApplication(id)!;
+  }
+
+  /** Test/ops helper: force updated_at for TTL boundary checks. */
+  setApplicationTimestamps(
+    id: string,
+    timestamps: { createdAt?: string; updatedAt?: string },
+  ): void {
+    const current = this.getApplication(id);
+    if (!current) throw new Error("Application not found");
+    this.db
+      .prepare(
+        `UPDATE applications SET created_at = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        timestamps.createdAt ?? current.createdAt,
+        timestamps.updatedAt ?? current.updatedAt,
+        id,
+      );
   }
 
   deleteApplication(id: string): DocumentRecord[] {

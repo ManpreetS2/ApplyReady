@@ -1,7 +1,10 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, FileSearch, Lock, Scale } from "lucide-react";
+import { useConfig } from "../lib/config";
 
 export function LandingPage() {
+  const { publicDemoMode } = useConfig();
+
   return (
     <div className="space-y-16">
       <section className="relative overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[linear-gradient(160deg,rgba(255,255,255,0.82),rgba(243,236,225,0.9))] px-6 py-14 shadow-soft dark:bg-[linear-gradient(160deg,rgba(38,52,48,0.9),rgba(19,28,25,0.95))] sm:px-12">
@@ -17,19 +20,28 @@ export function LandingPage() {
             Know what’s missing before you press submit.
           </h1>
           <p className="mt-5 max-w-2xl text-lg text-ink-600 dark:text-ink-300">
-            Extract requirements with evidence, match your local documents, and get an honest
-            readiness score for scholarships, college applications, and internships.
+            {publicDemoMode
+              ? "Explore the fictional Future Engineers Scholarship walkthrough: extract requirements, inspect evidence, fix issues, and reach Ready to submit — without uploading personal files."
+              : "Extract requirements with evidence, match your local documents, and get an honest readiness score for scholarships, college applications, and internships."}
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Link to="/applications/new" className="btn-primary">
-              New application <ArrowRight className="h-4 w-4" aria-hidden />
+            <Link to="/demo" className="btn-primary">
+              Try the guided demo <ArrowRight className="h-4 w-4" aria-hidden />
             </Link>
-            <Link to="/demo" className="btn-secondary">
-              Try guided demo
-            </Link>
-            <Link to="/dashboard" className="btn-ghost">
-              Open dashboard
-            </Link>
+            {!publicDemoMode ? (
+              <>
+                <Link to="/applications/new" className="btn-secondary">
+                  New application
+                </Link>
+                <Link to="/dashboard" className="btn-ghost">
+                  Open dashboard
+                </Link>
+              </>
+            ) : (
+              <Link to="/privacy" className="btn-ghost">
+                Privacy & demo limits
+              </Link>
+            )}
           </div>
         </div>
       </section>
@@ -48,8 +60,10 @@ export function LandingPage() {
           },
           {
             icon: Lock,
-            title: "Local by design",
-            body: "Files stay on the machine running ApplyReady—local SQLite and uploads, not hosted AI or cloud sync.",
+            title: publicDemoMode ? "Demo by design" : "Local by design",
+            body: publicDemoMode
+              ? "This hosted demo uses generated fictional documents only. Real uploads, vault storage, and arbitrary URL fetching are disabled."
+              : "Files stay on the machine running ApplyReady—local SQLite and uploads, not hosted AI or cloud sync.",
           },
         ].map((item) => (
           <article key={item.title} className="card p-6">
@@ -65,9 +79,9 @@ export function LandingPage() {
       <section className="card p-6 sm:p-8">
         <h2 className="font-display text-2xl font-semibold">Built for application packets</h2>
         <p className="mt-2 max-w-3xl text-ink-600 dark:text-ink-300">
-          ApplyReady is not legal, immigration, financial, or professional compliance advice. It
-          helps you review scholarship, college, and internship packets with deterministic local
-          analysis and clear next steps.
+          ApplyReady is not legal, immigration, financial, admissions, or professional compliance
+          advice. It helps you review scholarship, college, and internship packets with
+          deterministic analysis and clear next steps.
         </p>
       </section>
     </div>
