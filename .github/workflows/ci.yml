@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   verify:
@@ -57,6 +58,17 @@ jobs:
 
       - name: Public-demo Playwright E2E
         run: npm run test:e2e:public-demo
+
+      - name: Upload public-demo Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-demo-playwright-artifacts
+          path: |
+            playwright-report-public-demo/
+            test-results-public-demo/
+          if-no-files-found: ignore
+          retention-days: 7
 
   docker-public-demo:
     name: Docker public-demo build and smoke

@@ -32,7 +32,7 @@ export default defineConfig({
   outputDir: "test-results-public-demo",
   use: {
     baseURL: `http://127.0.0.1:${port}`,
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
     actionTimeout: 20_000,

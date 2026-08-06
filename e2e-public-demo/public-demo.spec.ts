@@ -10,6 +10,58 @@ async function collectPageErrors(page: Page) {
   return { pageErrors, consoleErrors };
 }
 
+/** Wait until config load + optional session restore finish. */
+async function waitForDemoPageReady(page: Page) {
+  await expect(page.getByTestId("demo-page")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("demo-page")).not.toHaveAttribute(
+    "data-demo-state",
+    "restoring",
+    { timeout: 60_000 },
+  );
+  await expect(
+    page
+      .getByRole("button", { name: "Start guided demo" })
+      .or(page.getByRole("button", { name: "Reset demo" })),
+  ).toBeVisible({ timeout: 60_000 });
+}
+
+/**
+ * After navigation/reload, session restore may reopen an active demo.
+ * Wait for a stable state, then reset so the packet is at step 0.
+ */
+async function resetDemoToInitialReview(page: Page) {
+  await waitForDemoPageReady(page);
+  const resetButton = page.getByRole("button", { name: "Reset demo" });
+  if (await resetButton.isVisible()) {
+    const response = page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/demo/") &&
+        r.url().includes("/reset") &&
+        r.request().method() === "POST",
+      { timeout: 60_000 },
+    );
+    await resetButton.click();
+    await response;
+  } else {
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    await expect(page.getByRole("button", { name: "Reset demo" })).toBeVisible({
+      timeout: 60_000,
+    });
+    const response = page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/demo/") &&
+        r.url().includes("/reset") &&
+        r.request().method() === "POST",
+      { timeout: 60_000 },
+    );
+    await page.getByRole("button", { name: "Reset demo" }).click();
+    await response;
+  }
+  await expect(page.getByText(/Initial packet review/i)).toBeVisible({
+    timeout: 60_000,
+  });
+}
+
 async function applyFixesUntilReady(page: Page) {
   for (let i = 0; i < 8; i += 1) {
     const ready = page.getByText(/Ready to submit/i).first();
@@ -38,6 +90,7 @@ async function applyFixesUntilReady(page: Page) {
 }
 
 async function startAndCompleteDemo(page: Page) {
+  await waitForDemoPageReady(page);
   await page.getByRole("button", { name: "Start guided demo" }).click();
   await expect(page.getByRole("button", { name: "Apply suggested fix" })).toBeVisible({
     timeout: 60_000,
@@ -79,20 +132,7 @@ test.describe("public demo portfolio mode", () => {
     await expect(page.getByRole("button", { name: /Print \/ Save as PDF/i })).toBeVisible();
 
     await page.goto("/demo");
-    // Session restore may reopen the completed demo — reset to return to step 0.
-    const resetButton = page.getByRole("button", { name: "Reset demo" });
-    if (await resetButton.isVisible().catch(() => false)) {
-      await resetButton.click();
-    } else {
-      await page.getByRole("button", { name: "Start guided demo" }).click();
-      await expect(page.getByRole("button", { name: "Reset demo" })).toBeVisible({
-        timeout: 60_000,
-      });
-      await page.getByRole("button", { name: "Reset demo" }).click();
-    }
-    await expect(page.getByText(/Initial packet review/i)).toBeVisible({
-      timeout: 60_000,
-    });
+    await resetDemoToInitialReview(page);
 
     expect(errors.pageErrors, errors.pageErrors.join("\n")).toEqual([]);
     expect(
@@ -107,6 +147,7 @@ test.describe("public demo portfolio mode", () => {
     page,
   }) => {
     await page.goto("/demo");
+    await waitForDemoPageReady(page);
     await page.getByRole("button", { name: "Start guided demo" }).click();
     await expect(page.getByRole("button", { name: "Apply suggested fix" })).toBeVisible({
       timeout: 60_000,
@@ -117,11 +158,13 @@ test.describe("public demo portfolio mode", () => {
     });
 
     await page.reload();
-    await expect(page.getByText(/Restoring guided demo|Add unofficial transcript/i)).toBeVisible();
+    await waitForDemoPageReady(page);
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-state", "active");
     await expect(page.getByText(/Add unofficial transcript/i)).toBeVisible({
       timeout: 30_000,
     });
     await expect(page.getByRole("button", { name: "Start guided demo" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reset demo" })).toBeVisible();
   });
 
   test("unsupported routes redirect away from restricted areas", async ({ page }) => {
@@ -140,6 +183,7 @@ test.describe("public demo portfolio mode", () => {
     await page.goto("/");
     await expect(page.getByText(/Public portfolio demo/i)).toBeVisible();
     await page.getByRole("link", { name: /Try the guided demo/i }).click();
+    await waitForDemoPageReady(page);
     await expect(page.getByRole("button", { name: "Start guided demo" })).toBeVisible();
   });
 
@@ -156,6 +200,7 @@ test.describe("public demo portfolio mode", () => {
       );
       expect(scrollWidth, `${size.width}x${size.height}`).toBeLessThanOrEqual(1);
       await page.goto("/demo");
+      await waitForDemoPageReady(page);
       const demoScroll = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
@@ -183,6 +228,8 @@ test.describe("public demo portfolio mode", () => {
 
     await pageA.goto(`${baseURL}/demo`);
     await pageB.goto(`${baseURL}/demo`);
+    await waitForDemoPageReady(pageA);
+    await waitForDemoPageReady(pageB);
 
     const startA = pageA.waitForResponse(
       (r) => r.url().includes("/api/demo/start") && r.request().method() === "POST",
