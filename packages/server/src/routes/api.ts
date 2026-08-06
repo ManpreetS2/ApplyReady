@@ -211,13 +211,15 @@ export function createApiRouter(db: Database.Database): Router {
     asyncHandler(async (req, res) => {
       const id = req.params.id!;
       const application = loadApplicationForRead(repos, id);
+      const documents = repos.listDocuments(id).map((d) => {
+        if (!config.publicDemoMode) return d;
+        const { storedFilename: _stored, ...safe } = d;
+        return safe;
+      });
       const report = {
         application,
         requirements: repos.listRequirements(id),
-        documents: repos.listDocuments(id).map((d) => ({
-          ...d,
-          // never export full text
-        })),
+        documents,
         matches: repos.listMatches(id),
         issues: repos.listIssues(id),
         conflicts: repos.listConflicts(id),

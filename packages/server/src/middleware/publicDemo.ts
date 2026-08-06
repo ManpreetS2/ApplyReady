@@ -64,8 +64,40 @@ export const PUBLIC_DEMO_ALLOWED_ROUTES: RouteRule[] = [
   { method: "GET", pattern: /^\/settings\/storage\/?$/ },
 ];
 
+/**
+ * Normalize an API-relative path for allowlist checks.
+ * Rejects null bytes and resolves `.` / `..` segments after decoding.
+ */
+export function normalizePublicDemoPath(apiPath: string): string | null {
+  if (!apiPath) return "/";
+  if (apiPath.includes("\0") || apiPath.includes("%00")) return null;
+
+  let decoded = apiPath;
+  try {
+    // Decode once; refuse paths that still look percent-encoded with traversal.
+    decoded = decodeURIComponent(apiPath);
+  } catch {
+    return null;
+  }
+  if (decoded.includes("\0")) return null;
+
+  const input = decoded.startsWith("/") ? decoded : `/${decoded}`;
+  const parts: string[] = [];
+  for (const segment of input.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  return `/${parts.join("/")}`;
+}
+
 export function isPublicDemoAllowedRoute(method: string, apiPath: string): boolean {
-  const normalized = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
+  const normalized = normalizePublicDemoPath(apiPath);
+  if (!normalized) return false;
   return PUBLIC_DEMO_ALLOWED_ROUTES.some(
     (rule) =>
       rule.method === method.toUpperCase() && rule.pattern.test(normalized),
@@ -85,7 +117,9 @@ export function publicDemoGuard(
     next();
     return;
   }
-  if (isPublicDemoAllowedRoute(req.method, req.path)) {
+  // Prefer Express-normalized path; also strip any leftover query fragment.
+  const rawPath = (req.path || "/").split("?")[0] || "/";
+  if (isPublicDemoAllowedRoute(req.method, rawPath)) {
     next();
     return;
   }

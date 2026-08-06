@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
@@ -16,8 +17,11 @@ const ConfigContext = createContext<ClientConfig | null>(null);
 export function ConfigProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
 
-  useEffect(() => {
+  const loadConfig = useCallback(() => {
+    setError(null);
+    setConfig(null);
     let cancelled = false;
     fetch("/api/config")
       .then(async (response) => {
@@ -37,34 +41,41 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       .catch((err: unknown) => {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Config load failed");
-        // Fail closed toward local UX only when the API is unreachable in local
-        // development; public demos always serve /api/config from the same origin.
-        setConfig({ publicDemoMode: false, mode: "local" });
+        // Fail closed: never enable local-only navigation without a confirmed config.
+        setConfig(null);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  useEffect(() => {
+    return loadConfig();
+  }, [loadConfig, retryToken]);
+
   if (!config) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center">
         <p className="text-sm text-ink-600 dark:text-ink-300" role="status">
-          Loading ApplyReady…
+          {error
+            ? "Could not load ApplyReady configuration. Local and demo controls stay locked until the server responds."
+            : "Loading ApplyReady…"}
         </p>
+        {error ? (
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => setRetryToken((value) => value + 1)}
+          >
+            Retry
+          </button>
+        ) : null}
       </div>
     );
   }
 
   return (
-    <ConfigContext.Provider value={config}>
-      {error ? (
-        <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
-          Could not refresh mode configuration. Continuing in local UI mode.
-        </div>
-      ) : null}
-      {children}
-    </ConfigContext.Provider>
+    <ConfigContext.Provider value={config}>{children}</ConfigContext.Provider>
   );
 }
 

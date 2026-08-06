@@ -92,12 +92,16 @@ export function createApp(db: Database.Database) {
               connectSrc: ["'self'"],
               objectSrc: ["'none'"],
               frameAncestors: ["'none'"],
+              baseUri: ["'self'"],
+              formAction: ["'self'"],
             },
           }
         : false,
       crossOriginEmbedderPolicy: false,
       // Allow the SPA's crossorigin module scripts to load from the same host.
       crossOriginResourcePolicy: { policy: "cross-origin" },
+      referrerPolicy: { policy: "no-referrer" },
+      frameguard: { action: "deny" },
     }),
   );
 
