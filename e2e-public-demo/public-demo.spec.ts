@@ -10,7 +10,7 @@ async function collectPageErrors(page: Page) {
   return { pageErrors, consoleErrors };
 }
 
-/** Wait until config load + optional session restore finish. */
+/** Wait until config load + optional session restore finish before any Start/Reset click. */
 async function waitForDemoPageReady(page: Page) {
   await expect(page.getByTestId("demo-page")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("demo-page")).not.toHaveAttribute(
