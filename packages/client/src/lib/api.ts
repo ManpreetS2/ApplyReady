@@ -219,6 +219,10 @@ export const api = {
       `/api/applications/${appId}/use-vault-document/${vaultId}`,
       { method: "POST" },
     ),
+  demoSteps: () =>
+    request<{
+      steps: Array<{ step: number; title: string; summary: string }>;
+    }>("/api/demo/steps"),
   startDemo: () =>
     request<{
       application: Application;

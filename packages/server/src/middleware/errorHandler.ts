@@ -30,11 +30,12 @@ export function errorHandler(
   }
 
   if (err instanceof ZodError) {
+    const exposeDetails = !config.publicDemoMode && !config.isProduction;
     res.status(400).json({
       error: {
         code: "VALIDATION_ERROR",
         message: "Request validation failed.",
-        details: err.flatten(),
+        ...(exposeDetails ? { details: err.flatten() } : {}),
         nextSteps: ["Check the highlighted fields and try again."],
       },
     });

@@ -121,6 +121,16 @@ if (vault.status !== 403 || vault.body?.error?.code !== "PUBLIC_DEMO_ONLY") {
   fail(`vault expected PUBLIC_DEMO_ONLY, got ${vault.status} ${vault.text}`);
 }
 
+const list = await request("GET", "/api/applications");
+if (list.status !== 403 || list.body?.error?.code !== "PUBLIC_DEMO_ONLY") {
+  fail(`list applications expected PUBLIC_DEMO_ONLY, got ${list.status} ${list.text}`);
+}
+
+const analyze = await request("POST", `/api/applications/${id}/analyze`);
+if (analyze.status !== 403 || analyze.body?.error?.code !== "PUBLIC_DEMO_ONLY") {
+  fail(`analyze expected PUBLIC_DEMO_ONLY, got ${analyze.status} ${analyze.text}`);
+}
+
 const clear = await request("DELETE", "/api/settings/clear-all");
 if (clear.status !== 403 || clear.body?.error?.code !== "PUBLIC_DEMO_ONLY") {
   fail(`clear-all expected PUBLIC_DEMO_ONLY, got ${clear.status} ${clear.text}`);

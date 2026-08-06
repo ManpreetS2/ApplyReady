@@ -149,7 +149,20 @@ export function ApplicationDetailPage() {
   }
 
   if (!application) {
-    return <ErrorBanner error={error || new Error("Application not found")} />;
+    return (
+      <div className="space-y-4">
+        <ErrorBanner error={error || new Error("Application not found")} />
+        {publicDemoMode ? (
+          <Link to="/demo" className="btn-primary inline-flex">
+            Back to guided demo
+          </Link>
+        ) : (
+          <Link to="/dashboard" className="btn-secondary inline-flex">
+            Return to dashboard
+          </Link>
+        )}
+      </div>
+    );
   }
 
   const tabs: Array<{ id: Tab; label: string }> = [

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../lib/api";
+import { useConfig } from "../lib/config";
 import { formatDate, readinessLabel } from "../lib/format";
 import { ErrorBanner } from "../components/ErrorBanner";
 
 export function ReportPage() {
   const { id = "" } = useParams();
+  const { publicDemoMode } = useConfig();
   const [report, setReport] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<unknown>(null);
 
@@ -83,6 +85,11 @@ export function ReportPage() {
         <Link to={`/applications/${id}`} className="btn-ghost">
           Back to application
         </Link>
+        {publicDemoMode ? (
+          <Link to="/demo" className="btn-ghost">
+            Back to guided demo
+          </Link>
+        ) : null}
       </div>
 
       <article className="card space-y-6 p-6 sm:p-8">

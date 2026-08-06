@@ -79,10 +79,20 @@ test.describe("public demo portfolio mode", () => {
     await expect(page.getByRole("button", { name: /Print \/ Save as PDF/i })).toBeVisible();
 
     await page.goto("/demo");
-    await page.getByRole("button", { name: "Start guided demo" }).click();
-    await expect(page.getByRole("button", { name: "Reset demo" })).toBeVisible();
-    await page.getByRole("button", { name: "Reset demo" }).click();
-    await expect(page.getByText(/Initial packet review/i)).toBeVisible();
+    // Session restore may reopen the completed demo — reset to return to step 0.
+    const resetButton = page.getByRole("button", { name: "Reset demo" });
+    if (await resetButton.isVisible().catch(() => false)) {
+      await resetButton.click();
+    } else {
+      await page.getByRole("button", { name: "Start guided demo" }).click();
+      await expect(page.getByRole("button", { name: "Reset demo" })).toBeVisible({
+        timeout: 60_000,
+      });
+      await page.getByRole("button", { name: "Reset demo" }).click();
+    }
+    await expect(page.getByText(/Initial packet review/i)).toBeVisible({
+      timeout: 60_000,
+    });
 
     expect(errors.pageErrors, errors.pageErrors.join("\n")).toEqual([]);
     expect(
@@ -91,6 +101,27 @@ test.describe("public demo portfolio mode", () => {
       ),
       errors.consoleErrors.join("\n"),
     ).toEqual([]);
+  });
+
+  test("refresh restores in-progress guided demo from session storage", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    await expect(page.getByRole("button", { name: "Apply suggested fix" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.getByRole("button", { name: "Apply suggested fix" }).click();
+    await expect(page.getByText(/Add unofficial transcript/i)).toBeVisible({
+      timeout: 60_000,
+    });
+
+    await page.reload();
+    await expect(page.getByText(/Restoring guided demo|Add unofficial transcript/i)).toBeVisible();
+    await expect(page.getByText(/Add unofficial transcript/i)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("button", { name: "Start guided demo" })).toHaveCount(0);
   });
 
   test("unsupported routes redirect away from restricted areas", async ({ page }) => {
@@ -110,6 +141,26 @@ test.describe("public demo portfolio mode", () => {
     await expect(page.getByText(/Public portfolio demo/i)).toBeVisible();
     await page.getByRole("link", { name: /Try the guided demo/i }).click();
     await expect(page.getByRole("button", { name: "Start guided demo" })).toBeVisible();
+  });
+
+  test("mobile viewports avoid horizontal page scroll", async ({ page }) => {
+    for (const size of [
+      { width: 390, height: 844 },
+      { width: 430, height: 932 },
+      { width: 768, height: 1024 },
+    ]) {
+      await page.setViewportSize(size);
+      await page.goto("/");
+      const scrollWidth = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(scrollWidth, `${size.width}x${size.height}`).toBeLessThanOrEqual(1);
+      await page.goto("/demo");
+      const demoScroll = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(demoScroll, `demo ${size.width}x${size.height}`).toBeLessThanOrEqual(1);
+    }
   });
 
   test("keyboard navigation reaches guided demo CTA", async ({ page }) => {

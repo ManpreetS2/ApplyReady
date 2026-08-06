@@ -213,7 +213,12 @@ export async function startGuidedDemo(db: Database.Database) {
 export async function advanceGuidedDemo(db: Database.Database, applicationId: string) {
   const repos = new Repositories(db);
   const app = repos.getApplication(applicationId);
-  if (!app || !app.isDemo) {
+  if (!app) {
+    throw new AppError("NOT_FOUND", "Application not found.", 404, [
+      "Start a new guided demo from the landing page.",
+    ]);
+  }
+  if (!app.isDemo) {
     throw new AppError("NOT_DEMO", "Application is not a guided demo.", 400);
   }
 
@@ -358,7 +363,12 @@ async function replaceCategoryDoc(
 export async function resetGuidedDemo(db: Database.Database, applicationId: string) {
   const repos = new Repositories(db);
   const app = repos.getApplication(applicationId);
-  if (!app || !app.isDemo) {
+  if (!app) {
+    throw new AppError("NOT_FOUND", "Application not found.", 404, [
+      "Start a new guided demo from the landing page.",
+    ]);
+  }
+  if (!app.isDemo) {
     throw new AppError("NOT_DEMO", "Application is not a guided demo.", 400);
   }
   const docs = repos.deleteApplication(applicationId);

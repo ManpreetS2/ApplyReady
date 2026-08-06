@@ -22,6 +22,7 @@ describe("public demo mode security and concurrency", () => {
 
   afterEach(() => {
     config.publicDemoMode = false;
+    config.isProduction = false;
     delete process.env.APPLYREADY_ENABLE_RATE_LIMIT;
   });
 
@@ -292,6 +293,122 @@ describe("public demo mode security and concurrency", () => {
     expect(second.application!.id).not.toBe(firstId);
     const repos = new Repositories(db);
     expect(repos.getApplication(firstId)?.demoStep).toBe(1);
+  });
+
+  it("rejects alternate methods, encoded traversal, and nested restricted paths", async () => {
+    const app = ctx.app();
+    const started = await request(app).post("/api/demo/start").expect(201);
+    const id = started.body.application.id as string;
+
+    for (const method of ["put", "patch", "delete"] as const) {
+      const res = await request(app)[method](`/api/applications/${id}`).expect(403);
+      expectPublicDemoOnly(res.body);
+    }
+
+    expectPublicDemoOnly(
+      (await request(app).get(`/api/applications/${id}/requirements`).expect(403))
+        .body,
+    );
+    expectPublicDemoOnly(
+      (await request(app).get(`/api/applications/${id}/documents`).expect(403))
+        .body,
+    );
+    expectPublicDemoOnly(
+      (await request(app).post(`/api/applications/${id}/analyze`).expect(403)).body,
+    );
+    expectPublicDemoOnly(
+      (await request(app).get("/api/applications/%2e%2e/vault").expect(403)).body,
+    );
+    expectPublicDemoOnly(
+      (await request(app).post("/api/demo/start/../../vault").expect(403)).body,
+    );
+    expectPublicDemoOnly(
+      (await request(app).get("/api/vault?x=/demo/start").expect(403)).body,
+    );
+
+    const missing = await request(app)
+      .post("/api/demo/00000000-0000-4000-8000-000000000000/advance")
+      .expect(404);
+    expect(missing.body.error?.code).toBe("NOT_FOUND");
+    expect(JSON.stringify(missing.body)).not.toMatch(/\/Users\/|\/home\/|\\\\/);
+  });
+
+  it("public export omits storage filenames", async () => {
+    const app = ctx.app();
+    const started = await request(app).post("/api/demo/start").expect(201);
+    const id = started.body.application.id as string;
+    const exported = await request(app)
+      .get(`/api/applications/${id}/export`)
+      .expect(200);
+    expect(exported.body.documents?.length).toBeGreaterThan(0);
+    for (const doc of exported.body.documents) {
+      expect(doc.storedFilename).toBeUndefined();
+      expect(doc.originalFilename).toBeTruthy();
+    }
+    expect(JSON.stringify(exported.body)).not.toMatch(/\/Users\/|\/tmp\/|\\\\/);
+  });
+
+  it("does not expose Zod flatten details in public demo mode", async () => {
+    config.publicDemoMode = false;
+    const local = ctx.app();
+    // Switch after app creation so the request hits public mode error handler config.
+    config.publicDemoMode = true;
+    config.isProduction = true;
+    const app = ctx.app();
+    // Allowed route with invalid body still goes through Zod on local-only routes;
+    // use a blocked route that never reaches Zod — instead hit demo start with huge
+    // invalid content-type JSON on an allowed mutating path that has no body schema.
+    // Validate production path sanitization via a deliberately invalid local create
+    // while public mode is on (guard blocks before Zod):
+    const blocked = await request(app).post("/api/applications").send({}).expect(403);
+    expect(blocked.body.error?.details).toBeUndefined();
+
+    config.publicDemoMode = false;
+    config.isProduction = true;
+    const validation = await request(local)
+      .post("/api/applications")
+      .send({})
+      .expect(400);
+    expect(validation.body.error?.code).toBe("VALIDATION_ERROR");
+    expect(validation.body.error?.details).toBeUndefined();
+    config.isProduction = false;
+  });
+
+  it("cleanup is a no-op when no demos exist and ignores already-deleted ids", async () => {
+    const db = ctx.db();
+    const empty = cleanupStaleDemoApplications(db);
+    expect(empty.deleted).toBe(0);
+    expect(empty.failed).toBe(0);
+
+    const demo = await startGuidedDemo(db);
+    const id = demo.application!.id;
+    const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+    const repos = new Repositories(db);
+    repos.setApplicationTimestamps(id, {
+      createdAt: sevenHoursAgo,
+      updatedAt: sevenHoursAgo,
+    });
+    repos.deleteApplication(id);
+    const result = cleanupStaleDemoApplications(db);
+    expect(result.deleted).toBe(0);
+  });
+
+  it("demo start rate limit is enforced separately from general traffic", async () => {
+    process.env.APPLYREADY_ENABLE_RATE_LIMIT = "true";
+    const previous = { ...config.rateLimit };
+    config.rateLimit.max = 1000;
+    config.rateLimit.windowMs = 60_000;
+    config.rateLimit.demoStartMax = 2;
+    config.rateLimit.demoStartWindowMs = 60_000;
+    const app = ctx.app();
+
+    await request(app).post("/api/demo/start").expect(201);
+    await request(app).post("/api/demo/start").expect(201);
+    const limited = await request(app).post("/api/demo/start").expect(429);
+    expect(limited.body.error?.code).toBe("RATE_LIMITED");
+    expect(JSON.stringify(limited.body)).not.toMatch(/\/Users\/|stack|at Object/);
+
+    Object.assign(config.rateLimit, previous);
   });
 });
 

@@ -95,6 +95,8 @@ GitHub Actions builds this image and runs `scripts/ci-public-demo-smoke.mjs` aga
 
 Demo metadata and generated PDFs are written under the configured temp directories. On hosts with ephemeral disks (common for free tiers), data disappears on restart. That is expected for this portfolio demo.
 
+Browser refresh on `/demo` restores the current visitor’s in-progress guided demo from session storage when that demo still exists on the server. After a host restart, temporary demos are gone and visitors start a new guided demo.
+
 ## Stale-demo cleanup
 
 - Each visitor receives a separate demo application with a cryptographically strong UUID.
@@ -102,6 +104,11 @@ Demo metadata and generated PDFs are written under the configured temp directori
 - Applications with `isDemo === true` whose `updatedAt` is older than `PUBLIC_DEMO_TTL_HOURS` (default 6) are deleted opportunistically when a new demo starts, and on a lightweight interval.
 - Non-demo applications are never deleted by cleanup.
 - Cleanup failures are logged without blocking new demos.
+- Invalid `PUBLIC_DEMO_TTL_HOURS` values fall back to the default of 6 hours.
+
+## Client configuration safety
+
+The browser UI loads `/api/config` before rendering navigation. If configuration cannot be loaded, ApplyReady stays locked on a retry screen and does **not** fall back to local-only controls (dashboard, vault, uploads).
 
 ## Why uploads are disabled
 
