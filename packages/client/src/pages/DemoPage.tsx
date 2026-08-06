@@ -156,14 +156,24 @@ export function DemoPage() {
 
   if (restoring) {
     return (
-      <p className="text-sm text-ink-600 dark:text-ink-300" role="status">
+      <p
+        className="text-sm text-ink-600 dark:text-ink-300"
+        role="status"
+        aria-busy="true"
+        data-testid="demo-page"
+        data-demo-state="restoring"
+      >
         Restoring guided demo…
       </p>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div
+      className="space-y-6"
+      data-testid="demo-page"
+      data-demo-state={application ? "active" : "idle"}
+    >
       <div>
         <h1 className="font-display text-4xl font-semibold">Guided demo</h1>
         <p className="mt-2 max-w-3xl text-ink-600 dark:text-ink-300">
