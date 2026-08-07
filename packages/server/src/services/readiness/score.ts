@@ -8,6 +8,24 @@ import type {
   DocumentMatch,
 } from "@applyready/shared";
 
+const ELIGIBILITY_ISSUE_CODES = new Set([
+  "MINIMUM_GPA",
+  "GPA_CONFLICT",
+  "ENROLLMENT",
+  "DEADLINE_EXPIRED",
+  "DEADLINE_AMBIGUOUS",
+  "DEADLINE_TODAY",
+  "ELIGIBILITY_UNRESOLVED",
+]);
+
+function isDocumentRequirement(r: Requirement): boolean {
+  return (
+    r.category !== "other" &&
+    r.category !== "proof_of_eligibility" &&
+    r.category !== "proof_of_enrollment"
+  );
+}
+
 export function computeReadiness(params: {
   applicationId: string;
   requirements: Requirement[];
@@ -17,16 +35,20 @@ export function computeReadiness(params: {
 }): ReadinessReport {
   const { applicationId, requirements, matches, issues, conflicts } = params;
   const required = requirements.filter(
-    (r) =>
-      r.required &&
-      r.category !== "other" &&
-      r.category !== "proof_of_eligibility" &&
-      r.category !== "proof_of_enrollment",
+    (r) => r.required && isDocumentRequirement(r),
   );
   const openIssues = issues.filter((i) => i.status === "open");
   const blocking = openIssues.filter((i) => i.severity === "blocking");
   const warnings = openIssues.filter((i) => i.severity === "warning");
   const unresolvedConflicts = conflicts.filter((c) => !c.resolved);
+  const uncertainRequirementIssues = openIssues.filter(
+    (i) => i.code === "UNCERTAIN_REQUIREMENT",
+  );
+  const eligibilityUnresolved = openIssues.filter(
+    (i) =>
+      ELIGIBILITY_ISSUE_CODES.has(i.code) &&
+      (i.severity === "blocking" || i.severity === "needs_confirmation"),
+  );
 
   const bestByRequirement = new Map<string, DocumentMatch>();
   for (const match of matches) {
@@ -66,6 +88,8 @@ export function computeReadiness(params: {
     }
   }
 
+  uncertainRequirements += uncertainRequirementIssues.length;
+
   const requiredCoverage =
     required.length === 0 ? 1 : requiredPresent / required.length;
   const confirmationRatio =
@@ -85,6 +109,7 @@ export function computeReadiness(params: {
     unresolvedConflicts.filter((c) => c.equivalent === false).length * 0.1 +
       unresolvedConflicts.filter((c) => c.equivalent == null).length * 0.03,
   );
+  const eligibilityPenalty = Math.min(0.35, eligibilityUnresolved.length * 0.12);
 
   const factors: ReadinessBreakdown["factors"] = [
     {
@@ -102,8 +127,8 @@ export function computeReadiness(params: {
     {
       label: "Blocking issues",
       weight: 20,
-      score: Math.round((1 - blockingPenalty) * 20),
-      note: `${blocking.length} open blocking issue(s)`,
+      score: Math.round((1 - blockingPenalty - eligibilityPenalty / 2) * 20),
+      note: `${blocking.length} blocking, ${eligibilityUnresolved.length} eligibility`,
     },
     {
       label: "Warnings & uncertainty",
@@ -125,20 +150,28 @@ export function computeReadiness(params: {
   );
   score = Math.max(0, Math.min(100, score));
 
+  const missingRequiredDocs = required.some((req) => {
+    const match = bestByRequirement.get(req.id);
+    return (
+      !match ||
+      !(
+        match.userConfirmed ||
+        match.status === "confirmed" ||
+        (match.status === "likely" && match.confidence >= 0.8)
+      )
+    );
+  });
+
   const hardBlock =
     blocking.length > 0 ||
-    required.some((req) => {
-      const match = bestByRequirement.get(req.id);
-      return (
-        !match ||
-        !(
-          match.userConfirmed ||
-          match.status === "confirmed" ||
-          (match.status === "likely" && match.confidence >= 0.8)
-        )
-      );
-    }) ||
-    unresolvedConflicts.some((c) => c.equivalent === false);
+    missingRequiredDocs ||
+    unresolvedConflicts.some((c) => c.equivalent === false) ||
+    eligibilityUnresolved.some((i) => i.severity === "blocking");
+
+  const preventsReady =
+    hardBlock ||
+    eligibilityUnresolved.length > 0 ||
+    uncertainRequirementIssues.length > 0;
 
   let status: ReadinessStatus;
   if (required.length === 0 && matches.length === 0) {
@@ -147,7 +180,12 @@ export function computeReadiness(params: {
   } else if (hardBlock || score < 55) {
     status = "not_ready";
     if (hardBlock) score = Math.min(score, 54);
-  } else if (score < 75 || warnings.length > 0 || uncertainRequirements > 0) {
+  } else if (
+    score < 75 ||
+    warnings.length > 0 ||
+    uncertainRequirements > 0 ||
+    eligibilityUnresolved.length > 0
+  ) {
     status = "needs_attention";
   } else if (score < 90 || likelyMatches > 0) {
     status = "nearly_ready";
@@ -155,13 +193,20 @@ export function computeReadiness(params: {
     status = "ready";
   }
 
-  // Cannot be ready with hard blockers.
   if (hardBlock && status === "ready") status = "not_ready";
+  if (preventsReady && status === "ready") {
+    status =
+      hardBlock || eligibilityUnresolved.some((i) => i.severity === "blocking")
+        ? "not_ready"
+        : "needs_attention";
+  }
   if (
     status === "ready" &&
     (blocking.length > 0 ||
       requiredPresent < required.length ||
-      unresolvedConflicts.some((c) => c.equivalent === false))
+      unresolvedConflicts.some((c) => c.equivalent === false) ||
+      eligibilityUnresolved.length > 0 ||
+      uncertainRequirementIssues.length > 0)
   ) {
     status = "not_ready";
   }

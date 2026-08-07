@@ -348,7 +348,11 @@ export function createApiRouter(db: Database.Database): Router {
     asyncHandler(async (req, res) => {
       requireApp(repos, req.params.id!);
       const body = mergeRequirementsSchema.parse(req.body);
-      const requirement = repos.mergeRequirements(body.keepId, body.mergeId);
+      const requirement = repos.mergeRequirements(
+        body.keepId,
+        body.mergeId,
+        req.params.id!,
+      );
       res.json({ requirement });
     }),
   );
@@ -539,6 +543,14 @@ export function createApiRouter(db: Database.Database): Router {
       const document = repos.getDocument(body.documentId);
       if (!document) {
         throw new AppError("NOT_FOUND", "Document not found.", 404);
+      }
+      if (document.applicationId !== requirement.applicationId) {
+        throw new AppError(
+          "CROSS_APPLICATION_DOCUMENT",
+          "Documents can only be assigned to requirements in the same application.",
+          409,
+          ["Choose a document that belongs to this application."],
+        );
       }
       const match = repos.upsertMatch({
         id: newId(),

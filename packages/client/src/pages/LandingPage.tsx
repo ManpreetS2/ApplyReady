@@ -22,7 +22,7 @@ export function LandingPage() {
           <p className="mt-5 max-w-2xl text-lg text-ink-600 dark:text-ink-300">
             {publicDemoMode
               ? "Explore the fictional Future Engineers Scholarship walkthrough: extract requirements, inspect evidence, fix issues, and reach Ready to submit — without uploading personal files."
-              : "Extract requirements with evidence, match your local documents, and get an honest readiness score for scholarships, college applications, and internships."}
+              : "Extract evidence-backed document requirements, match your local files, and get an honest readiness score for scholarships, college applications, and internships. Not a full ATS or job-qualification matcher."}
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link to="/demo" className="btn-primary">

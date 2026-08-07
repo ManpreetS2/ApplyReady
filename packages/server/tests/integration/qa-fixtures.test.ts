@@ -35,7 +35,9 @@ describe("QA fixture pack", () => {
         expectedGraduationDate: "May 2027",
         major: "Computer Science",
         gpa: "3.62",
+        currentlyEnrolled: true,
         targetOrganization: "Future Engineers Foundation",
+        userConfirmed: true,
       })
       .expect(200);
 
