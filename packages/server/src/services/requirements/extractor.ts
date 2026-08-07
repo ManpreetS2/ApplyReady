@@ -90,10 +90,19 @@ function detectOptional(sentence: string): boolean {
   );
 }
 
+/** Explicit mandatory language only — no silent default to required. */
 function detectRequired(sentence: string): boolean {
-  return /\b(required|must submit|must provide|need to provide|needs to include|include|shall submit|is required)\b/i.test(
+  return /\b(required|must submit|must provide|shall (?:submit|provide)|needs? to (?:provide|include|submit)|is required)\b/i.test(
     sentence,
   );
+}
+
+function detectCertainty(
+  sentence: string,
+): ExtractedRequirementDraft["certainty"] {
+  if (detectOptional(sentence)) return "optional";
+  if (detectRequired(sentence)) return "required";
+  return "uncertain";
 }
 
 function extractWordLimits(sentence: string): {
@@ -134,12 +143,16 @@ function extractPageLimits(sentence: string): {
   return { min: null, max: null };
 }
 
+/** Only collect extensions when the source explicitly mentions formats. */
 function extractExtensions(sentence: string): string[] {
   const found = new Set<string>();
   if (/\bpdf\b/i.test(sentence)) found.add(".pdf");
-  if (/\bdocx?\b/i.test(sentence)) found.add(".docx");
+  if (/\bdocx\b/i.test(sentence)) found.add(".docx");
+  if (/\bdoc\b(?!\w)/i.test(sentence) && !/\bdocx\b/i.test(sentence)) {
+    // bare "doc" is too ambiguous; only accept explicit .doc extension
+  }
   if (/\btxt\b/i.test(sentence)) found.add(".txt");
-  const dotted = sentence.match(/\.[a-zA-Z]{2,5}/g) || [];
+  const dotted = sentence.match(/\.(pdf|docx|doc|txt)\b/gi) || [];
   for (const ext of dotted) found.add(ext.toLowerCase());
   return [...found];
 }
@@ -173,9 +186,15 @@ function extractRecCount(sentence: string): number | null {
 
 function extractDeadline(text: string): string | null {
   const m = text.match(
-    /(?:deadline|due(?:\s+date)?|submit by|must be submitted by)[:\s]+([A-Za-z]+ \d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2})/i,
+    /(?:deadline|due(?:\s+date)?|submit by|must be submitted by)[:\s]+([A-Za-z]+ \d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?)/i,
   );
   return m?.[1] ?? null;
+}
+
+function detectSignatureRequired(sentence: string): boolean {
+  return /\b(signature|signed (?:letter|recommendation)|hand[- ]?signed|must be signed)\b/i.test(
+    sentence,
+  );
 }
 
 function emptyDraft(
@@ -185,9 +204,9 @@ function emptyDraft(
       "title" | "category" | "sourceEvidence" | "extractionRule" | "confidence"
     >,
 ): ExtractedRequirementDraft {
+  const certainty = partial.certainty ?? "uncertain";
   return {
     description: "",
-    required: true,
     conditional: false,
     conditionText: null,
     sourceLocation: null,
@@ -207,6 +226,8 @@ function emptyDraft(
     organizationNameExpected: null,
     customValidationNotes: null,
     ...partial,
+    certainty,
+    required: certainty === "required",
   };
 }
 
@@ -233,16 +254,18 @@ export class RuleRequirementExtractor implements RequirementExtractor {
           }
         }
 
-        const optional = detectOptional(sentence);
-        const required = optional ? false : detectRequired(sentence) || true;
+        const certaintyRaw = detectCertainty(sentence);
         const words = extractWordLimits(sentence);
         const pages = extractPageLimits(sentence);
         const extensions = extractExtensions(sentence);
         const filenamePattern = extractFilenamePattern(sentence);
         const recCount = extractRecCount(sentence);
-        const signatureRequired =
-          /\bsignature\b/i.test(sentence) ||
-          pattern.category === "recommendation";
+        const signatureRequired = detectSignatureRequired(sentence);
+        // Explicit filename instructions are actionable rules, not ambiguous mentions.
+        const certainty =
+          filenamePattern && certaintyRaw === "uncertain"
+            ? "required"
+            : certaintyRaw;
         const match = pattern.terms.exec(sentence);
         const evidence =
           match != null
@@ -250,18 +273,18 @@ export class RuleRequirementExtractor implements RequirementExtractor {
             : sentence;
 
         let confidence = 0.55;
-        if (detectRequired(sentence) || optional) confidence += 0.2;
+        if (certainty === "required" || certainty === "optional") confidence += 0.2;
         if (extensions.length) confidence += 0.08;
         if (words.max || words.min) confidence += 0.08;
         if (filenamePattern) confidence += 0.1;
-        if (!detectRequired(sentence) && !optional) confidence -= 0.15;
+        if (certainty === "uncertain") confidence -= 0.15;
 
         drafts.push(
           emptyDraft({
             title: pattern.title,
             description: sentence,
             category: pattern.category,
-            required,
+            certainty,
             conditional: /\bif\b|\bwhen\b|\bfor applicants who\b/i.test(sentence),
             conditionText: /\bif\b|\bwhen\b/i.test(sentence) ? sentence : null,
             sourceEvidence: evidence || sentence,
@@ -302,7 +325,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
               title: "Combined Packet Filename",
               description: sentence,
               category: "combined_packet",
-              required: true,
+              certainty: "required",
               sourceEvidence: sentence,
               sourceLocation: `Sentence ${i + 1}`,
               confidence: 0.85,
@@ -321,7 +344,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
             title: "Minimum GPA",
             description: sentence,
             category: "proof_of_eligibility",
-            required: true,
+            certainty: "required",
             sourceEvidence: sentence,
             sourceLocation: `Sentence ${i + 1}`,
             confidence: 0.7,
@@ -341,7 +364,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
             title: "Enrollment Requirement",
             description: sentence,
             category: "proof_of_enrollment",
-            required: true,
+            certainty: "required",
             sourceEvidence: sentence,
             sourceLocation: `Sentence ${i + 1}`,
             confidence: 0.65,
@@ -359,7 +382,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
           title: "Submission Deadline",
           description: `Submission deadline: ${deadline}`,
           category: "other",
-          required: true,
+          certainty: "required",
           sourceEvidence:
             cleaned.match(
               /(?:deadline|due(?:\s+date)?|submit by)[^.!\n]{0,120}/i,
@@ -383,22 +406,14 @@ export class RuleRequirementNormalizer implements RequirementNormalizer {
         ? draft.acceptedDocumentTypes
         : [draft.category];
 
-    let acceptedFileExtensions = draft.acceptedFileExtensions;
-    if (acceptedFileExtensions.length === 0) {
-      if (
-        ["resume", "transcript", "combined_packet"].includes(draft.category)
-      ) {
-        acceptedFileExtensions = [".pdf"];
-      } else if (["essay", "recommendation"].includes(draft.category)) {
-        // Essays/recommendations often arrive as DOCX unless a format is stated.
-        acceptedFileExtensions = [".pdf", ".docx"];
-      }
-    }
+    // Never invent file formats when the source did not specify them.
+    const acceptedFileExtensions = draft.acceptedFileExtensions;
 
     return {
       ...draft,
       title: draft.title.trim(),
       description: draft.description.trim(),
+      required: draft.certainty === "required",
       acceptedDocumentTypes,
       acceptedFileExtensions,
       confidence: confidenceLevel(draft.confidence),
@@ -406,25 +421,53 @@ export class RuleRequirementNormalizer implements RequirementNormalizer {
   }
 }
 
+function normalizeDedupeText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function dedupeKey(item: ExtractedRequirementDraft): string {
+  if (item.category === "other" && item.dateRequirement) {
+    return `deadline:${normalizeDedupeText(item.dateRequirement)}`;
+  }
+  if (item.category === "combined_packet" && item.filenamePattern) {
+    return `packet:${normalizeDedupeText(item.filenamePattern)}`;
+  }
+  return [
+    item.category,
+    normalizeDedupeText(item.title),
+    item.sourceLocation || "",
+    normalizeDedupeText(item.sourceEvidence).slice(0, 160),
+    item.filenamePattern || "",
+    item.dateRequirement || "",
+    String(item.wordLimitMinimum ?? ""),
+    String(item.wordLimitMaximum ?? ""),
+    String(item.pageLimitMinimum ?? ""),
+    String(item.pageLimitMaximum ?? ""),
+    String(item.minimumCount),
+    String(item.maximumCount ?? ""),
+    [...item.acceptedFileExtensions].sort().join(","),
+  ].join("::");
+}
+
 export class RuleRequirementDeduplicator implements RequirementDeduplicator {
   deduplicate(items: ExtractedRequirementDraft[]): ExtractedRequirementDraft[] {
-    const byCategory = new Map<string, ExtractedRequirementDraft>();
+    const byKey = new Map<string, ExtractedRequirementDraft>();
 
     for (const item of items) {
-      const key =
-        item.category === "other" && item.dateRequirement
-          ? `deadline:${item.dateRequirement}`
-          : item.category === "combined_packet" && item.filenamePattern
-            ? `packet:${item.filenamePattern}`
-            : item.category;
-
-      const existing = byCategory.get(key);
+      const key = dedupeKey(item);
+      const existing = byKey.get(key);
       if (!existing) {
-        byCategory.set(key, item);
+        byKey.set(key, item);
         continue;
       }
 
-      byCategory.set(key, {
+      const certaintyOrder = { required: 2, uncertain: 1, optional: 0 } as const;
+      const certainty =
+        certaintyOrder[existing.certainty] >= certaintyOrder[item.certainty]
+          ? existing.certainty
+          : item.certainty;
+
+      byKey.set(key, {
         ...existing,
         ...item,
         title: existing.title.length >= item.title.length ? existing.title : item.title,
@@ -432,7 +475,8 @@ export class RuleRequirementDeduplicator implements RequirementDeduplicator {
           existing.description.length >= item.description.length
             ? existing.description
             : item.description,
-        required: existing.required || item.required,
+        certainty,
+        required: certainty === "required",
         confidence: Math.max(existing.confidence, item.confidence),
         sourceEvidence:
           existing.sourceEvidence.length >= item.sourceEvidence.length
@@ -457,7 +501,7 @@ export class RuleRequirementDeduplicator implements RequirementDeduplicator {
       });
     }
 
-    return [...byCategory.values()].sort((a, b) => b.confidence - a.confidence);
+    return [...byKey.values()].sort((a, b) => b.confidence - a.confidence);
   }
 }
 

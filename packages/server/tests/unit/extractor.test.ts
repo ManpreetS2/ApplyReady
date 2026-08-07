@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runRequirementPipeline } from "../../src/services/requirements/extractor.js";
 import { DEMO_REQUIREMENTS_TEXT } from "../../src/services/demo/content.js";
 
-describe("requirement extraction", () => {
+describe("requirement extraction fidelity", () => {
   it("extracts required documents, word limits, filename, and deadline", () => {
     const drafts = runRequirementPipeline(DEMO_REQUIREMENTS_TEXT, {
       organization: "Future Engineers Foundation",
@@ -19,6 +19,7 @@ describe("requirement extraction", () => {
 
     const essay = drafts.find((d) => d.category === "essay");
     expect(essay?.required).toBe(true);
+    expect(essay?.certainty).toBe("required");
     expect(essay?.wordLimitMinimum).toBe(400);
     expect(essay?.wordLimitMaximum).toBe(500);
     expect(essay?.sourceEvidence.length).toBeGreaterThan(10);
@@ -33,6 +34,53 @@ describe("requirement extraction", () => {
     expect(deadline?.dateRequirement).toMatch(/October 15, 2026/i);
   });
 
+  it("does not invent PDF-only when resume format is unspecified", () => {
+    const drafts = runRequirementPipeline(
+      "Applicants must submit a resume.",
+      { sourceType: "pasted_text", sourceName: "t" },
+    );
+    const resume = drafts.find((d) => d.category === "resume");
+    expect(resume?.certainty).toBe("required");
+    expect(resume?.acceptedFileExtensions).toEqual([]);
+  });
+
+  it("keeps explicit PDF-only resume formats", () => {
+    const drafts = runRequirementPipeline(
+      "A resume in PDF format is required.",
+      { sourceType: "pasted_text", sourceName: "t" },
+    );
+    const resume = drafts.find((d) => d.category === "resume");
+    expect(resume?.acceptedFileExtensions).toEqual([".pdf"]);
+  });
+
+  it("does not imply signatureRequired for recommendations", () => {
+    const drafts = runRequirementPipeline(
+      "One recommendation letter is required.",
+      { sourceType: "pasted_text", sourceName: "t" },
+    );
+    const rec = drafts.find((d) => d.category === "recommendation");
+    expect(rec?.signatureRequired).toBe(false);
+  });
+
+  it("sets signatureRequired only with explicit signed wording", () => {
+    const drafts = runRequirementPipeline(
+      "A signed recommendation letter with signature is required.",
+      { sourceType: "pasted_text", sourceName: "t" },
+    );
+    const rec = drafts.find((d) => d.category === "recommendation");
+    expect(rec?.signatureRequired).toBe(true);
+  });
+
+  it("marks ambiguous mentions as uncertain, not blocking required", () => {
+    const drafts = runRequirementPipeline(
+      "Students often include a portfolio with their materials.",
+      { sourceType: "pasted_text", sourceName: "t" },
+    );
+    const portfolio = drafts.find((d) => d.category === "portfolio");
+    expect(portfolio?.certainty).toBe("uncertain");
+    expect(portfolio?.required).toBe(false);
+  });
+
   it("detects optional requirements", () => {
     const drafts = runRequirementPipeline(
       "A portfolio is optional. Applicants may submit work samples.",
@@ -40,6 +88,19 @@ describe("requirement extraction", () => {
     );
     const portfolio = drafts.find((d) => d.category === "portfolio");
     expect(portfolio?.required).toBe(false);
+    expect(portfolio?.certainty).toBe("optional");
+  });
+
+  it("keeps two distinct essays as separate requirements", () => {
+    const drafts = runRequirementPipeline(
+      [
+        "Essay question 1: Describe your goals in 300 words. An essay is required.",
+        "Essay question 2: Describe a challenge you overcame in 500 words. An essay is required.",
+      ].join(" "),
+      { sourceType: "pasted_text", sourceName: "t" },
+    );
+    const essays = drafts.filter((d) => d.category === "essay");
+    expect(essays.length).toBeGreaterThanOrEqual(2);
   });
 
   it("detects recommendation counts", () => {

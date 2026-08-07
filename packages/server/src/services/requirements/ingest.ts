@@ -1,16 +1,11 @@
-import fs from "node:fs";
 import type Database from "better-sqlite3";
 import type { SourceType } from "@applyready/shared";
 import { Repositories } from "../../db/repositories.js";
-import {
-  assertSafeUpload,
-  resolveUploadPath,
-  sanitizeOriginalFilename,
-} from "../../utils/files.js";
+import { sanitizeOriginalFilename, assertSafeUpload } from "../../utils/files.js";
 import { excerpt } from "../../utils/text.js";
 import { AppError } from "../../utils/errors.js";
 import { extractHtmlText, LocalDocumentReader } from "../documents/readers.js";
-import { fetchPublicText } from "../urlFetch.js";
+import { fetchPublicResource } from "../urlFetch.js";
 import { runRequirementPipeline } from "./extractor.js";
 
 export async function ingestPastedText(
@@ -61,15 +56,15 @@ export async function ingestUrl(
   const app = repos.getApplication(applicationId);
   if (!app) throw new AppError("NOT_FOUND", "Application not found", 404);
 
-  const fetched = await fetchPublicText(url);
+  const fetched = await fetchPublicResource(url);
   let text = fetched.text;
   let sourceType: SourceType = "url";
   let warnings: string[] = [];
 
-  if (fetched.contentType.includes("pdf")) {
+  if (fetched.isPdf) {
     const reader = new LocalDocumentReader();
     const parsed = await reader.read(
-      Buffer.from(fetched.text, "binary"),
+      fetched.body,
       "requirements.pdf",
       "application/pdf",
     );
@@ -121,6 +116,10 @@ export async function ingestUrl(
   return { source, requirements, warnings };
 }
 
+/**
+ * Parse requirement source uploads from memory only.
+ * Files are not persisted under uploads/sources (avoids orphaned files).
+ */
 export async function ingestUploadedSource(
   db: Database.Database,
   applicationId: string,
@@ -132,16 +131,31 @@ export async function ingestUploadedSource(
   const app = repos.getApplication(applicationId);
   if (!app) throw new AppError("NOT_FOUND", "Application not found", 404);
 
-  const { safeName } = assertSafeUpload({
+  assertSafeUpload({
     originalFilename,
     mimeType,
     size: buffer.byteLength,
   });
-  const target = resolveUploadPath("sources", safeName);
-  fs.writeFileSync(target, buffer);
 
   const reader = new LocalDocumentReader();
-  const parsed = await reader.read(buffer, originalFilename, mimeType);
+  let parsed;
+  try {
+    parsed = await reader.read(buffer, originalFilename, mimeType);
+  } catch (error) {
+    // Nothing was written to disk; rethrow cleanly.
+    throw error;
+  }
+
+  if (!parsed.text || parsed.text.trim().length < 20) {
+    throw new AppError(
+      "EMPTY_REQUIREMENTS",
+      "No usable requirement text could be extracted from the uploaded file.",
+      400,
+      ["Paste the requirements text, or upload a searchable PDF/DOCX/TXT file."],
+      { warnings: parsed.warnings },
+    );
+  }
+
   const ext = originalFilename.toLowerCase();
   const sourceType: SourceType = ext.endsWith(".pdf")
     ? "pdf"

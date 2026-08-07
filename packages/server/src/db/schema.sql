@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS requirements (
   description TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL,
   required INTEGER NOT NULL DEFAULT 1,
+  certainty TEXT NOT NULL DEFAULT 'required',
   conditional INTEGER NOT NULL DEFAULT 0,
   condition_text TEXT,
   source_type TEXT,
@@ -157,6 +158,7 @@ CREATE TABLE IF NOT EXISTS applicant_profiles (
   gpa TEXT,
   address TEXT,
   target_organization TEXT,
+  currently_enrolled INTEGER,
   user_confirmed INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
@@ -207,3 +209,46 @@ CREATE INDEX IF NOT EXISTS idx_requirements_app ON requirements(application_id);
 CREATE INDEX IF NOT EXISTS idx_documents_app ON documents(application_id);
 CREATE INDEX IF NOT EXISTS idx_issues_app ON issues(application_id);
 CREATE INDEX IF NOT EXISTS idx_matches_app ON document_matches(application_id);
+
+-- Defense-in-depth: matches must stay within one application.
+CREATE TRIGGER IF NOT EXISTS trg_document_matches_same_app_insert
+BEFORE INSERT ON document_matches
+FOR EACH ROW
+BEGIN
+  SELECT CASE
+    WHEN (
+      SELECT application_id FROM requirements WHERE id = NEW.requirement_id
+    ) IS NULL
+      OR (
+        SELECT application_id FROM documents WHERE id = NEW.document_id
+      ) IS NULL
+      OR (
+        SELECT application_id FROM requirements WHERE id = NEW.requirement_id
+      ) != NEW.application_id
+      OR (
+        SELECT application_id FROM documents WHERE id = NEW.document_id
+      ) != NEW.application_id
+    THEN RAISE(ABORT, 'document_matches cross-application reference')
+  END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_document_matches_same_app_update
+BEFORE UPDATE OF application_id, requirement_id, document_id ON document_matches
+FOR EACH ROW
+BEGIN
+  SELECT CASE
+    WHEN (
+      SELECT application_id FROM requirements WHERE id = NEW.requirement_id
+    ) IS NULL
+      OR (
+        SELECT application_id FROM documents WHERE id = NEW.document_id
+      ) IS NULL
+      OR (
+        SELECT application_id FROM requirements WHERE id = NEW.requirement_id
+      ) != NEW.application_id
+      OR (
+        SELECT application_id FROM documents WHERE id = NEW.document_id
+      ) != NEW.application_id
+    THEN RAISE(ABORT, 'document_matches cross-application reference')
+  END;
+END;

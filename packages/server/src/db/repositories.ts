@@ -29,6 +29,7 @@ import {
   mapVault,
 } from "./mappers.js";
 import { newId, nowIso } from "../utils/ids.js";
+import { AppError } from "../utils/errors.js";
 import type { ExtractedRequirementDraft } from "../providers/interfaces.js";
 
 export class Repositories {
@@ -51,6 +52,17 @@ export class Repositories {
       )
       .all(cutoffIso)
       .map((r) => mapApplication(r as Record<string, unknown>));
+  }
+
+  /** Active (non-stale) demo applications — used for public demo capacity. */
+  countActiveDemoApplications(cutoffIso: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM applications
+         WHERE is_demo = 1 AND updated_at >= ?`,
+      )
+      .get(cutoffIso) as { count: number };
+    return Number(row.count);
   }
 
   getApplication(id: string): Application | null {
@@ -227,7 +239,7 @@ export class Repositories {
     const now = nowIso();
     const stmt = this.db.prepare(
       `INSERT INTO requirements (
-        id, application_id, source_id, title, description, category, required, conditional,
+        id, application_id, source_id, title, description, category, required, certainty, conditional,
         condition_text, source_type, source_name, source_url, source_evidence, source_location,
         confidence, confidence_level, extraction_rule, user_confirmed, accepted_document_types,
         accepted_file_extensions, minimum_count, maximum_count, word_limit_minimum, word_limit_maximum,
@@ -235,11 +247,13 @@ export class Repositories {
         expiration_rule, required_keywords, organization_name_expected, custom_validation_notes,
         created_at, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
       )`,
     );
 
     for (const draft of drafts) {
+      const certainty = draft.certainty;
+      const required = certainty === "required";
       stmt.run(
         newId(),
         applicationId,
@@ -247,7 +261,8 @@ export class Repositories {
         draft.title,
         draft.description,
         draft.category,
-        draft.required ? 1 : 0,
+        required ? 1 : 0,
+        certainty,
         draft.conditional ? 1 : 0,
         draft.conditionText,
         source.sourceType,
@@ -307,10 +322,14 @@ export class Repositories {
   ): Requirement {
     const now = nowIso();
     const id = newId();
+    const certainty =
+      input.certainty ??
+      (input.required === false ? "optional" : "required");
+    const required = certainty === "required";
     this.db
       .prepare(
         `INSERT INTO requirements (
-          id, application_id, source_id, title, description, category, required, conditional,
+          id, application_id, source_id, title, description, category, required, certainty, conditional,
           condition_text, source_type, source_name, source_url, source_evidence, source_location,
           confidence, confidence_level, extraction_rule, user_confirmed, accepted_document_types,
           accepted_file_extensions, minimum_count, maximum_count, word_limit_minimum, word_limit_maximum,
@@ -318,7 +337,7 @@ export class Repositories {
           expiration_rule, required_keywords, organization_name_expected, custom_validation_notes,
           created_at, updated_at
         ) VALUES (
-          ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+          ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
         )`,
       )
       .run(
@@ -328,7 +347,8 @@ export class Repositories {
         input.title,
         input.description ?? "",
         input.category,
-        (input.required ?? true) ? 1 : 0,
+        required ? 1 : 0,
+        certainty,
         (input.conditional ?? false) ? 1 : 0,
         input.conditionText ?? null,
         "pasted_text",
@@ -365,10 +385,21 @@ export class Repositories {
     const current = this.getRequirement(id);
     if (!current) throw new Error("Requirement not found");
     const next = { ...current, ...patch, updatedAt: nowIso() } as Requirement;
+    if (patch.certainty != null) {
+      next.certainty = patch.certainty as Requirement["certainty"];
+      next.required = next.certainty === "required";
+    } else if (patch.required != null) {
+      next.required = Boolean(patch.required);
+      next.certainty = next.required
+        ? "required"
+        : current.certainty === "uncertain"
+          ? "uncertain"
+          : "optional";
+    }
     this.db
       .prepare(
         `UPDATE requirements SET
-          title=?, description=?, category=?, required=?, conditional=?, condition_text=?,
+          title=?, description=?, category=?, required=?, certainty=?, conditional=?, condition_text=?,
           source_evidence=?, source_location=?, confidence=?, confidence_level=?, user_confirmed=?,
           accepted_document_types=?, accepted_file_extensions=?, minimum_count=?, maximum_count=?,
           word_limit_minimum=?, word_limit_maximum=?, page_limit_minimum=?, page_limit_maximum=?,
@@ -381,6 +412,7 @@ export class Repositories {
         next.description,
         next.category,
         next.required ? 1 : 0,
+        next.certainty,
         next.conditional ? 1 : 0,
         next.conditionText,
         next.sourceEvidence,
@@ -413,11 +445,47 @@ export class Repositories {
     this.db.prepare("DELETE FROM requirements WHERE id=?").run(id);
   }
 
-  mergeRequirements(keepId: string, mergeId: string): Requirement {
+  mergeRequirements(
+    keepId: string,
+    mergeId: string,
+    expectedApplicationId?: string,
+  ): Requirement {
     const keep = this.getRequirement(keepId);
     const merge = this.getRequirement(mergeId);
-    if (!keep || !merge) throw new Error("Requirements not found");
+    if (!keep || !merge) {
+      throw new AppError("NOT_FOUND", "Requirements not found", 404);
+    }
+    if (keepId === mergeId) {
+      throw new AppError(
+        "INVALID_MERGE",
+        "Cannot merge a requirement with itself.",
+        400,
+      );
+    }
+    if (keep.applicationId !== merge.applicationId) {
+      throw new AppError(
+        "CROSS_APPLICATION_MERGE",
+        "Requirements from different applications cannot be merged.",
+        409,
+      );
+    }
+    if (
+      expectedApplicationId &&
+      (keep.applicationId !== expectedApplicationId ||
+        merge.applicationId !== expectedApplicationId)
+    ) {
+      throw new AppError(
+        "CROSS_APPLICATION_MERGE",
+        "Requirements must belong to the application in the URL.",
+        409,
+      );
+    }
     const evidence = `${keep.sourceEvidence}\n---\n${merge.sourceEvidence}`;
+    const certaintyOrder = { required: 2, uncertain: 1, optional: 0 } as const;
+    const certainty =
+      certaintyOrder[keep.certainty] >= certaintyOrder[merge.certainty]
+        ? keep.certainty
+        : merge.certainty;
     this.updateRequirement(keepId, {
       sourceEvidence: evidence,
       wordLimitMinimum: keep.wordLimitMinimum ?? merge.wordLimitMinimum,
@@ -430,7 +498,8 @@ export class Repositories {
         ]),
       ],
       minimumCount: Math.max(keep.minimumCount, merge.minimumCount),
-      required: keep.required || merge.required,
+      certainty,
+      required: certainty === "required",
       userConfirmed: keep.userConfirmed || merge.userConfirmed,
     });
     this.deleteRequirement(mergeId);
@@ -728,7 +797,7 @@ export class Repositories {
         `UPDATE applicant_profiles SET
           full_legal_name=?, preferred_name=?, email=?, phone=?, school=?,
           expected_graduation_date=?, major=?, gpa=?, address=?, target_organization=?,
-          user_confirmed=?, updated_at=?
+          currently_enrolled=?, user_confirmed=?, updated_at=?
          WHERE application_id=?`,
       )
       .run(
@@ -742,6 +811,11 @@ export class Repositories {
         next.gpa,
         next.address,
         next.targetOrganization,
+        next.currentlyEnrolled == null
+          ? null
+          : next.currentlyEnrolled
+            ? 1
+            : 0,
         next.userConfirmed ? 1 : 0,
         next.updatedAt,
         applicationId,
