@@ -1,24 +1,104 @@
 import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
 import net from "node:net";
+import type { LookupAddress, LookupOptions } from "node:dns";
 import { FETCH_TIMEOUT_MS, MAX_FETCH_BYTES } from "@applyready/shared";
 import { AppError } from "../utils/errors.js";
 
 const BLOCKED_HOSTS = new Set(["localhost", "metadata.google.internal"]);
 
-function isPrivateIp(ip: string): boolean {
-  if (net.isIP(ip) === 0) return true;
-  if (ip === "0.0.0.0" || ip === "::" || ip === "::1") return true;
-  if (ip.startsWith("127.")) return true;
-  if (ip.startsWith("10.")) return true;
-  if (ip.startsWith("192.168.")) return true;
-  if (ip.startsWith("169.254.")) return true;
-  if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80"))
+type LookupAllFn = (
+  hostname: string,
+  options: { all: true; verbatim?: boolean },
+) => Promise<LookupAddress[]>;
+
+let lookupAllImpl: LookupAllFn = (hostname, options) =>
+  dns.lookup(hostname, options);
+let allowPrivateForTests = false;
+
+/** Test-only hooks. Hard-fails outside Vitest/test environments. */
+export function setUrlFetchTestHooks(hooks: {
+  lookupAll?: LookupAllFn | null;
+  allowPrivate?: boolean;
+} | null): void {
+  if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
+    throw new Error("setUrlFetchTestHooks is only available in tests");
+  }
+  if (!hooks) {
+    lookupAllImpl = (hostname, options) => dns.lookup(hostname, options);
+    allowPrivateForTests = false;
+    return;
+  }
+  if (hooks.lookupAll) lookupAllImpl = hooks.lookupAll;
+  if (hooks.lookupAll === null) {
+    lookupAllImpl = (hostname, options) => dns.lookup(hostname, options);
+  }
+  if (hooks.allowPrivate != null) allowPrivateForTests = hooks.allowPrivate;
+}
+
+export function isPrivateIp(ip: string): boolean {
+  const normalized = ip.replace(/^\[|\]$/g, "").toLowerCase();
+  if (net.isIP(normalized) === 0) return true;
+  if (
+    normalized === "0.0.0.0" ||
+    normalized === "::" ||
+    normalized === "::1" ||
+    normalized === "0:0:0:0:0:0:0:0" ||
+    normalized === "0:0:0:0:0:0:0:1"
+  ) {
     return true;
-  const parts = ip.split(".").map(Number);
-  if (parts.length === 4) {
+  }
+  if (normalized.startsWith("127.")) return true;
+  if (normalized.startsWith("10.")) return true;
+  if (normalized.startsWith("192.168.")) return true;
+  if (normalized.startsWith("169.254.")) return true;
+  if (
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80")
+  ) {
+    return true;
+  }
+  const v4Mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4Mapped?.[1]) return isPrivateIp(v4Mapped[1]);
+
+  const parts = normalized.split(".").map(Number);
+  if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
     const [a, b] = parts as [number, number, number, number];
     if (a === 172 && b >= 16 && b <= 31) return true;
     if (a === 100 && b >= 64 && b <= 127) return true;
+  }
+  return false;
+}
+
+export function hasPdfMagic(buffer: Buffer): boolean {
+  return (
+    buffer.length >= 5 && buffer.subarray(0, 5).toString("latin1") === "%PDF-"
+  );
+}
+
+export function looksLikePdf(buffer: Buffer, contentType: string): boolean {
+  const type = contentType.toLowerCase();
+  if (type.includes("application/pdf")) return true;
+  return hasPdfMagic(buffer);
+}
+
+export function isAllowedFetchContentType(
+  contentType: string,
+  buffer: Buffer,
+): boolean {
+  const type = (contentType || "").toLowerCase();
+  if (
+    type.includes("text/html") ||
+    type.includes("text/plain") ||
+    type.includes("application/xhtml") ||
+    type.includes("application/pdf")
+  ) {
+    return true;
+  }
+  if (type.includes("application/octet-stream") || type === "") {
+    return hasPdfMagic(buffer);
   }
   return false;
 }
@@ -55,7 +135,8 @@ export async function assertSafePublicUrl(rawUrl: string): Promise<URL> {
   if (
     BLOCKED_HOSTS.has(hostname) ||
     hostname.endsWith(".local") ||
-    hostname.endsWith(".internal")
+    hostname.endsWith(".internal") ||
+    hostname.endsWith(".localhost")
   ) {
     throw new AppError(
       "BLOCKED_HOST",
@@ -66,6 +147,7 @@ export async function assertSafePublicUrl(rawUrl: string): Promise<URL> {
   }
 
   if (net.isIP(hostname)) {
+    // Literal IPs stay blocked even under test hooks — only DNS pinning uses allowPrivate.
     if (isPrivateIp(hostname)) {
       throw new AppError(
         "PRIVATE_IP",
@@ -75,75 +157,246 @@ export async function assertSafePublicUrl(rawUrl: string): Promise<URL> {
       );
     }
   } else {
-    let addresses: string[] = [];
-    try {
-      const resolved = await dns.lookup(hostname, { all: true });
-      addresses = resolved.map((r) => r.address);
-    } catch {
-      throw new AppError(
-        "DNS_FAILURE",
-        "Could not resolve the hostname.",
-        400,
-        ["Check the URL spelling, or paste/upload the requirements instead."],
-      );
-    }
-    if (addresses.length === 0 || addresses.some(isPrivateIp)) {
-      throw new AppError(
-        "PRIVATE_IP",
-        "The URL resolves to a private or blocked address.",
-        400,
-        ["Use a public website URL."],
-      );
-    }
+    await resolveValidatedAddresses(hostname);
   }
 
   return url;
 }
 
-export async function fetchPublicText(rawUrl: string): Promise<{
+export async function resolveValidatedAddresses(
+  hostname: string,
+): Promise<LookupAddress[]> {
+  let resolved: LookupAddress[] = [];
+  try {
+    resolved = await lookupAllImpl(hostname, { all: true, verbatim: true });
+  } catch {
+    throw new AppError(
+      "DNS_FAILURE",
+      "Could not resolve the hostname.",
+      400,
+      ["Check the URL spelling, or paste/upload the requirements instead."],
+    );
+  }
+  if (
+    resolved.length === 0 ||
+    (resolved.some((entry) => isPrivateIp(entry.address)) &&
+      !allowPrivateForTests)
+  ) {
+    throw new AppError(
+      "PRIVATE_IP",
+      "The URL resolves to a private or blocked address.",
+      400,
+      ["Use a public website URL."],
+    );
+  }
+  return resolved;
+}
+
+type RawResponse = {
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  body: Buffer;
+  url: URL;
+};
+
+function headerValue(headers: http.IncomingHttpHeaders, name: string): string {
+  const raw = headers[name.toLowerCase()];
+  if (Array.isArray(raw)) return raw[0] || "";
+  return raw || "";
+}
+
+function pinnedLookup(addresses: LookupAddress[]) {
+  return (
+    _hostname: string,
+    options: LookupOptions | number | undefined,
+    callback?: (
+      err: NodeJS.ErrnoException | null,
+      address: string | LookupAddress[],
+      family?: number,
+    ) => void,
+  ) => {
+    const cb =
+      typeof options === "function"
+        ? (options as NonNullable<typeof callback>)
+        : callback;
+    if (!cb) return;
+    const opts = typeof options === "object" && options ? options : undefined;
+    if (opts?.all) {
+      cb(null, addresses);
+      return;
+    }
+    const family =
+      typeof options === "number"
+        ? options
+        : opts?.family
+          ? Number(opts.family)
+          : 0;
+    const match =
+      addresses.find((entry) => !family || entry.family === family) ||
+      addresses[0];
+    if (!match) {
+      cb(
+        Object.assign(new Error("No validated public address"), {
+          code: "ENOTFOUND",
+        }),
+        "",
+        0,
+      );
+      return;
+    }
+    cb(null, match.address, match.family);
+  };
+}
+
+async function requestPinned(
+  target: URL,
+  addresses: LookupAddress[] | null,
+  signal: AbortSignal,
+): Promise<RawResponse> {
+  const transport = target.protocol === "https:" ? https : http;
+  const port = target.port || (target.protocol === "https:" ? "443" : "80");
+
+  return new Promise<RawResponse>((resolve, reject) => {
+    const request = transport.request(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        servername: target.hostname,
+        port,
+        path: `${target.pathname}${target.search}`,
+        method: "GET",
+        headers: {
+          Host: target.host,
+          "User-Agent": "ApplyReadyLocal/1.0 (+local document readiness tool)",
+          Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
+          Connection: "close",
+        },
+        lookup: addresses ? (pinnedLookup(addresses) as never) : undefined,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        let total = 0;
+        let settled = false;
+
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          request.destroy();
+          reject(error);
+        };
+
+        response.on("data", (chunk: Buffer) => {
+          total += chunk.byteLength;
+          if (total > MAX_FETCH_BYTES) {
+            fail(
+              new AppError(
+                "RESPONSE_TOO_LARGE",
+                "The remote response exceeds the size limit.",
+                400,
+                ["Upload or paste the requirements instead."],
+              ),
+            );
+            return;
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => {
+          if (settled) return;
+          settled = true;
+          resolve({
+            status: response.statusCode || 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks),
+            url: target,
+          });
+        });
+        response.on("error", fail);
+      },
+    );
+
+    const onAbort = () => {
+      request.destroy(
+        new AppError("FETCH_TIMEOUT", "The request timed out.", 400, [
+          "Try again, or paste/upload the requirements instead.",
+        ]),
+      );
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+
+    request.on("error", (error) => {
+      if (error instanceof AppError) {
+        reject(error);
+        return;
+      }
+      reject(
+        new AppError(
+          "FETCH_FAILED",
+          "Could not fetch the requirements URL.",
+          400,
+          ["Paste or upload the requirements instead."],
+          { reason: error.message },
+        ),
+      );
+    });
+    request.end();
+  });
+}
+
+export type FetchedPublicResource = {
   url: string;
   contentType: string;
+  body: Buffer;
   text: string;
-}> {
+  isPdf: boolean;
+};
+
+export async function fetchPublicResource(
+  rawUrl: string,
+): Promise<FetchedPublicResource> {
   const initial = await assertSafePublicUrl(rawUrl);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const response = await fetch(initial.toString(), {
-      method: "GET",
-      redirect: "manual",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "ApplyReadyLocal/1.0 (+local document readiness tool)",
-        Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
-      },
-    });
-
-    let current = response;
+    let currentUrl = initial;
     let hop = 0;
-    let finalUrl = initial;
+    let response: RawResponse | null = null;
 
-    while (
-      [301, 302, 303, 307, 308].includes(current.status) &&
-      hop < 5
-    ) {
-      const location = current.headers.get("location");
+    while (hop <= 5) {
+      const addresses = net.isIP(currentUrl.hostname)
+        ? null
+        : await resolveValidatedAddresses(currentUrl.hostname);
+      response = await requestPinned(currentUrl, addresses, controller.signal);
+
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+
+      const location = headerValue(response.headers, "location");
       if (!location) break;
-      finalUrl = await assertSafePublicUrl(new URL(location, finalUrl).toString());
-      current = await fetch(finalUrl.toString(), {
-        method: "GET",
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "ApplyReadyLocal/1.0 (+local document readiness tool)",
-          Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
-        },
-      });
+      if (hop >= 5) {
+        throw new AppError(
+          "REDIRECT_LOOP",
+          "Too many redirects while fetching the URL.",
+          400,
+          ["Paste the final public page URL, or upload the requirements file."],
+        );
+      }
+      currentUrl = await assertSafePublicUrl(
+        new URL(location, currentUrl).toString(),
+      );
       hop += 1;
     }
 
-    if ([301, 302, 303, 307, 308].includes(current.status)) {
+    if (!response) {
+      throw new AppError(
+        "FETCH_FAILED",
+        "Could not fetch the requirements URL.",
+        400,
+        ["Paste or upload the requirements instead."],
+      );
+    }
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
       throw new AppError(
         "REDIRECT_LOOP",
         "Too many redirects while fetching the URL.",
@@ -152,34 +405,17 @@ export async function fetchPublicText(rawUrl: string): Promise<{
       );
     }
 
-    if (!current.ok) {
+    if (response.status < 200 || response.status >= 300) {
       throw new AppError(
         "FETCH_FAILED",
-        `The remote server responded with status ${current.status}.`,
+        `The remote server responded with status ${response.status}.`,
         400,
         ["Try again later, or paste/upload the requirements instead."],
       );
     }
 
-    const contentType = (current.headers.get("content-type") || "").toLowerCase();
-    const allowed =
-      contentType.includes("text/html") ||
-      contentType.includes("text/plain") ||
-      contentType.includes("application/xhtml") ||
-      contentType.includes("application/pdf") ||
-      contentType.includes("application/octet-stream") ||
-      contentType === "";
-
-    if (!allowed) {
-      throw new AppError(
-        "UNSUPPORTED_CONTENT_TYPE",
-        `Unsupported content type: ${contentType || "unknown"}.`,
-        400,
-        ["Use an HTML or text requirements page, or upload a PDF/DOCX/TXT file."],
-      );
-    }
-
-    const lengthHeader = current.headers.get("content-length");
+    const contentType = headerValue(response.headers, "content-type").toLowerCase();
+    const lengthHeader = headerValue(response.headers, "content-length");
     if (lengthHeader && Number(lengthHeader) > MAX_FETCH_BYTES) {
       throw new AppError(
         "RESPONSE_TOO_LARGE",
@@ -188,9 +424,7 @@ export async function fetchPublicText(rawUrl: string): Promise<{
         ["Upload or paste the requirements instead."],
       );
     }
-
-    const buffer = Buffer.from(await current.arrayBuffer());
-    if (buffer.byteLength > MAX_FETCH_BYTES) {
+    if (response.body.byteLength > MAX_FETCH_BYTES) {
       throw new AppError(
         "RESPONSE_TOO_LARGE",
         "The remote response exceeds the size limit.",
@@ -199,10 +433,22 @@ export async function fetchPublicText(rawUrl: string): Promise<{
       );
     }
 
+    if (!isAllowedFetchContentType(contentType, response.body)) {
+      throw new AppError(
+        "UNSUPPORTED_CONTENT_TYPE",
+        `Unsupported content type: ${contentType || "unknown"}.`,
+        400,
+        ["Use an HTML or text requirements page, or upload a PDF/DOCX/TXT file."],
+      );
+    }
+
+    const isPdf = looksLikePdf(response.body, contentType);
     return {
-      url: finalUrl.toString(),
+      url: currentUrl.toString(),
       contentType,
-      text: buffer.toString("utf8"),
+      body: response.body,
+      text: isPdf ? "" : response.body.toString("utf8"),
+      isPdf,
     };
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -224,4 +470,17 @@ export async function fetchPublicText(rawUrl: string): Promise<{
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function fetchPublicText(rawUrl: string): Promise<{
+  url: string;
+  contentType: string;
+  text: string;
+}> {
+  const fetched = await fetchPublicResource(rawUrl);
+  return {
+    url: fetched.url,
+    contentType: fetched.contentType,
+    text: fetched.text,
+  };
 }
