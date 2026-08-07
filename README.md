@@ -6,7 +6,9 @@
 
 Applicants often submit incomplete, inconsistent, or incorrectly formatted application packets: a missing transcript, an essay over the word limit, a recommendation addressed to the wrong organization, or a filename that breaks the required pattern.
 
-**ApplyReady** extracts evidence-backed requirements, analyzes local documents, matches materials to requirements, detects issues, and explains what remains before submission.
+**ApplyReady** extracts evidence-backed application/document requirements, analyzes local documents, matches materials to those requirements, detects issues, and explains what remains before submission.
+
+It is **not** a full ATS or job-qualification matcher. It does **not** scrape job boards, bypass anti-bot protections, or automatically reason about arbitrary natural-language eligibility such as years of experience, citizenship/work authorization, travel rules, or broad skill matching.
 
 **Proof:** the fictional Future Engineers Scholarship guided demo progresses from **Not ready** to **Ready to submit** using the same deterministic pipelines as real packets.
 
@@ -246,6 +248,9 @@ Docker public demo: see [docs/PUBLIC_DEMO_DEPLOYMENT.md](docs/PUBLIC_DEMO_DEPLOY
 - Physical-device testing is out of scope unless separately performed
 - Hosted public demo disables real uploads; it is not equivalent to full local mode
 - Independent concurrent demos use unpredictable IDs without accounts; not authenticated private sessions or multi-user SaaS
+- **Supported checks** focus on explicit application/document requirements: formats, counts, word/page limits, filenames, GPA, enrollment evidence, deadlines, and consistency conflicts
+- **Not yet** a full ATS qualification engine: no broad resume-vs-job skill matching, automatic job discovery, complex work-authorization qualification, or arbitrary natural-language eligibility reasoning
+- Does not market or implement job-board scraping or anti-bot circumvention
 
 ## Future improvements
 

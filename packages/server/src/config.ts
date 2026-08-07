@@ -59,6 +59,8 @@ export const config = {
     "PUBLIC_DEMO_CLEANUP_INTERVAL_MS",
     isTest ? 0 : 15 * 60 * 1000,
   ),
+  /** Max concurrent active public demos (after stale cleanup). Local mode ignores this. */
+  publicDemoMaxActiveDemos: envNumber("PUBLIC_DEMO_MAX_ACTIVE_DEMOS", 25),
   trustProxy: envFlag("TRUST_PROXY", isProduction),
   allowedOrigins: [
     ...parseOrigins(process.env.CORS_ORIGINS),

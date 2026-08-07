@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { config } from "../../config.js";
 import { Repositories } from "../../db/repositories.js";
 import { AppError } from "../../utils/errors.js";
 import { deleteFileQuietly, resolveUploadPath } from "../../utils/files.js";
@@ -174,6 +175,24 @@ export async function startGuidedDemo(db: Database.Database) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     console.error(`[applyready] opportunistic demo cleanup failed: ${message}`);
+  }
+
+  // Public-demo capacity ceiling (local mode is unaffected).
+  if (config.publicDemoMode) {
+    const ttlMs = Math.max(1, config.publicDemoTtlHours) * 60 * 60 * 1000;
+    const cutoffIso = new Date(Date.now() - ttlMs).toISOString();
+    const active = repos.countActiveDemoApplications(cutoffIso);
+    if (active >= config.publicDemoMaxActiveDemos) {
+      throw new AppError(
+        "DEMO_CAPACITY_REACHED",
+        "The public demo is at capacity. Please try again later.",
+        503,
+        [
+          "Wait a few minutes and try again.",
+          "Expired demos are cleaned up automatically; active demos are never deleted to make room.",
+        ],
+      );
+    }
   }
 
   const app = repos.createApplication({
