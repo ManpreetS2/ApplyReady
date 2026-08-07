@@ -15,6 +15,9 @@ export function useTempDb(options?: { publicDemoMode?: boolean }) {
     config.dbPath = path.join(tmp, "data", "test.sqlite");
     config.publicDemoMode = Boolean(options?.publicDemoMode);
     config.publicDemoTtlHours = Number(process.env.PUBLIC_DEMO_TTL_HOURS ?? 6);
+    config.publicDemoMaxActiveDemos = Number(
+      process.env.PUBLIC_DEMO_MAX_ACTIVE_DEMOS ?? 25,
+    );
     config.isProduction = process.env.NODE_ENV === "production";
     fs.mkdirSync(config.dataDir, { recursive: true });
     fs.mkdirSync(config.uploadsDir, { recursive: true });
@@ -22,6 +25,7 @@ export function useTempDb(options?: { publicDemoMode?: boolean }) {
   });
   afterEach(() => {
     config.publicDemoMode = false;
+    config.publicDemoMaxActiveDemos = 25;
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
   });

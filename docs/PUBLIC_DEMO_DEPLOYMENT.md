@@ -36,6 +36,7 @@ APPLYREADY_DATA_DIR=/tmp/applyready-data
 APPLYREADY_UPLOADS_DIR=/tmp/applyready-uploads
 APPLYREADY_DB_PATH=/tmp/applyready-data/applyready.sqlite
 PUBLIC_DEMO_TTL_HOURS=6
+PUBLIC_DEMO_MAX_ACTIVE_DEMOS=25
 ```
 
 Optional:
@@ -53,6 +54,8 @@ DEMO_MUTATION_RATE_LIMIT_MAX=120
 ```
 
 Do **not** set `APPLYREADY_DISABLE_RATE_LIMIT` in hosted environments (that flag is for automated local/E2E testing only).
+
+`PUBLIC_DEMO_MAX_ACTIVE_DEMOS` (default 25) is a global ceiling on active (non-expired) demos after stale cleanup. When capacity is reached, new demo starts return `DEMO_CAPACITY_REACHED` (503). Active demos are never deleted just to make room.
 
 ## Docker
 
