@@ -93,6 +93,7 @@ export interface ExtractedRequirementDraft {
   description: string;
   category: RequirementCategory;
   required: boolean;
+  certainty: "required" | "optional" | "uncertain";
   conditional: boolean;
   conditionText: string | null;
   sourceEvidence: string;

@@ -31,6 +31,7 @@ export function ReportPage() {
     id: string;
     title: string;
     required: boolean;
+    certainty?: "required" | "optional" | "uncertain";
     category: string;
     sourceEvidence: string;
   }>;
@@ -131,7 +132,12 @@ export function ReportPage() {
                   <p className="font-semibold">
                     {req.title}{" "}
                     <span className="font-normal text-ink-500">
-                      ({req.required ? "required" : "optional"} · {req.category})
+                      ({req.certainty === "uncertain"
+                        ? "uncertain"
+                        : req.required
+                          ? "required"
+                          : "optional"}{" "}
+                      · {req.category})
                     </span>
                   </p>
                   <p>

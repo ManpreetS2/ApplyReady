@@ -53,6 +53,9 @@ export type ParseStatus =
 
 export type ConfidenceLevel = "high" | "medium" | "low";
 
+/** Evidence-backed obligation strength for an extracted requirement. */
+export type RequirementCertainty = "required" | "optional" | "uncertain";
+
 export interface Application {
   id: string;
   name: string;
@@ -86,7 +89,13 @@ export interface Requirement {
   title: string;
   description: string;
   category: RequirementCategory;
+  /**
+   * True only when certainty === "required".
+   * Uncertain requirements stay required=false so they never silently become blockers.
+   */
   required: boolean;
+  /** required | optional | uncertain — uncertain must not be faked as optional. */
+  certainty: RequirementCertainty;
   conditional: boolean;
   conditionText: string | null;
   sourceType: SourceType | null;
@@ -203,6 +212,8 @@ export interface ApplicantProfile {
   gpa: string | null;
   address: string | null;
   targetOrganization: string | null;
+  /** Explicit user confirmation of current enrollment; school/grad date alone is insufficient. */
+  currentlyEnrolled: boolean | null;
   userConfirmed: boolean;
   updatedAt: string;
 }

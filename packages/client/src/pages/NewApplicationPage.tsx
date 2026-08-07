@@ -290,7 +290,13 @@ export function NewApplicationPage() {
                 <div>
                   <h2 className="font-display text-xl font-semibold">{req.title}</h2>
                   <p className="text-sm text-ink-500">
-                    {req.category} · {req.required ? "Required" : "Optional"} · confidence{" "}
+                    {req.category} ·{" "}
+                    {req.certainty === "uncertain"
+                      ? "Uncertain"
+                      : req.required
+                        ? "Required"
+                        : "Optional"}{" "}
+                    · confidence{" "}
                     {Math.round(req.confidence * 100)}%
                   </p>
                 </div>

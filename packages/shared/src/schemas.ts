@@ -48,6 +48,7 @@ export const createRequirementSchema = z.object({
   description: z.string().max(5000).default(""),
   category: requirementCategorySchema,
   required: z.boolean().default(true),
+  certainty: z.enum(["required", "optional", "uncertain"]).optional(),
   conditional: z.boolean().default(false),
   conditionText: z.string().nullable().optional(),
   sourceEvidence: z.string().default("Manually added by user"),
@@ -99,6 +100,7 @@ export const updateProfileSchema = z.object({
   gpa: z.string().nullable().optional(),
   address: z.string().nullable().optional(),
   targetOrganization: z.string().nullable().optional(),
+  currentlyEnrolled: z.boolean().nullable().optional(),
   userConfirmed: z.boolean().optional(),
 });
 

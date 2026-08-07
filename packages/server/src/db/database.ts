@@ -19,6 +19,38 @@ export function ensureDirectories(): void {
   fs.mkdirSync(path.join(config.uploadsDir, "sources"), { recursive: true });
 }
 
+function columnNames(
+  instance: Database.Database,
+  table: string,
+): Set<string> {
+  const rows = instance
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as Array<{ name: string }>;
+  return new Set(rows.map((r) => r.name));
+}
+
+/** Additive migrations for existing local SQLite databases. */
+export function migrateSchema(instance: Database.Database): void {
+  const requirementCols = columnNames(instance, "requirements");
+  if (!requirementCols.has("certainty")) {
+    instance.exec(
+      `ALTER TABLE requirements ADD COLUMN certainty TEXT NOT NULL DEFAULT 'required'`,
+    );
+    instance.exec(
+      `UPDATE requirements SET certainty = CASE WHEN required = 0 THEN 'optional' ELSE 'required' END`,
+    );
+  }
+
+  const profileCols = columnNames(instance, "applicant_profiles");
+  if (!profileCols.has("currently_enrolled")) {
+    instance.exec(
+      `ALTER TABLE applicant_profiles ADD COLUMN currently_enrolled INTEGER`,
+    );
+  }
+
+  // Triggers are idempotent via IF NOT EXISTS in schema.sql; re-exec is safe.
+}
+
 export function getDb(dbPath = config.dbPath): Database.Database {
   if (db && !config.isTest) return db;
   ensureDirectories();
@@ -29,6 +61,7 @@ export function getDb(dbPath = config.dbPath): Database.Database {
   instance.pragma("foreign_keys = ON");
   const schema = fs.readFileSync(schemaPath, "utf8");
   instance.exec(schema);
+  migrateSchema(instance);
   if (!config.isTest) db = instance;
   return instance;
 }

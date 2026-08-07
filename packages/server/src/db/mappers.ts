@@ -8,6 +8,7 @@ import type {
   Issue,
   ProfileConflict,
   Requirement,
+  RequirementCertainty,
   RequirementSource,
   ValidationResult,
   VaultDocument,
@@ -21,6 +22,16 @@ function jsonArray(value: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+function normalizeCertainty(
+  raw: unknown,
+  required: boolean,
+): RequirementCertainty {
+  if (raw === "required" || raw === "optional" || raw === "uncertain") {
+    return raw;
+  }
+  return required ? "required" : "optional";
 }
 
 export function mapApplication(row: Record<string, unknown>): Application {
@@ -63,6 +74,7 @@ export function mapRequirement(row: Record<string, unknown>): Requirement {
     description: String(row.description ?? ""),
     category: row.category as Requirement["category"],
     required: Boolean(row.required),
+    certainty: normalizeCertainty(row.certainty, Boolean(row.required)),
     conditional: Boolean(row.conditional),
     conditionText: (row.condition_text as string | null) ?? null,
     sourceType: (row.source_type as Requirement["sourceType"]) ?? null,
@@ -202,6 +214,10 @@ export function mapProfile(row: Record<string, unknown>): ApplicantProfile {
     gpa: (row.gpa as string | null) ?? null,
     address: (row.address as string | null) ?? null,
     targetOrganization: (row.target_organization as string | null) ?? null,
+    currentlyEnrolled:
+      row.currently_enrolled == null
+        ? null
+        : Boolean(row.currently_enrolled),
     userConfirmed: Boolean(row.user_confirmed),
     updatedAt: String(row.updated_at),
   };

@@ -61,6 +61,7 @@ export function ApplicationDetailPage() {
     gpa: "",
     expectedGraduationDate: "",
     targetOrganization: "",
+    currentlyEnrolled: false as boolean | null,
   });
 
   const load = useCallback(async () => {
@@ -88,6 +89,7 @@ export function ApplicationDetailPage() {
         gpa: data.profile.gpa || "",
         expectedGraduationDate: data.profile.expectedGraduationDate || "",
         targetOrganization: data.profile.targetOrganization || "",
+        currentlyEnrolled: data.profile.currentlyEnrolled,
       });
     }
     if (data.application.readinessScore != null && data.application.readinessStatus) {
@@ -299,8 +301,13 @@ export function ApplicationDetailPage() {
                   <div>
                     <h2 className="font-display text-xl font-semibold">{req.title}</h2>
                     <p className="text-sm text-ink-500">
-                      {req.category} · {req.required ? "Required" : "Optional"} ·{" "}
-                      {req.userConfirmed ? "Confirmed" : "Needs confirmation"}
+                      {req.category} ·{" "}
+                      {req.certainty === "uncertain"
+                        ? "Uncertain"
+                        : req.required
+                          ? "Required"
+                          : "Optional"}{" "}
+                      · {req.userConfirmed ? "Confirmed" : "Needs confirmation"}
                     </p>
                   </div>
                   {match ? (
@@ -594,13 +601,30 @@ export function ApplicationDetailPage() {
                 </label>
               ))}
             </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={profileDraft.currentlyEnrolled === true}
+                disabled={readOnly}
+                onChange={(e) =>
+                  setProfileDraft((prev) => ({
+                    ...prev,
+                    currentlyEnrolled: e.target.checked,
+                  }))
+                }
+              />
+              <span>I confirm I am currently enrolled</span>
+            </label>
             {!readOnly ? (
             <button
               type="button"
               className="btn-secondary"
               onClick={async () => {
                 try {
-                  const res = await api.updateProfile(id, profileDraft);
+                  const res = await api.updateProfile(id, {
+                    ...profileDraft,
+                    userConfirmed: true,
+                  });
                   setProfile(res.profile);
                 } catch (err) {
                   setError(err);
@@ -609,7 +633,8 @@ export function ApplicationDetailPage() {
             >
               Save profile
             </button>
-            ) : null}            {profile ? (
+            ) : null}
+            {profile ? (
               <p className="text-xs text-ink-500">
                 Last saved profile values remain local to this application.
               </p>
