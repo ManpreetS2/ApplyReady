@@ -6,16 +6,16 @@ import { HeuristicDocumentClassifier, extractHeadings } from "../documents/class
 import { ApplicantConsistencyChecker } from "../consistency/checker.js";
 import { HeuristicRequirementMatcher } from "../matching/matcher.js";
 import { RuleDocumentValidator } from "../validation/validator.js";
+import { conflictFingerprint } from "../validation/filenamePattern.js";
 import { computeReadiness } from "../readiness/score.js";
+import { assessDeadline } from "../deadlines/assess.js";
 
 export function analyzeApplication(db: Database.Database, applicationId: string) {
   const repos = new Repositories(db);
   const app = repos.getApplication(applicationId);
   if (!app) throw new Error("Application not found");
 
-  const requirements = repos
-    .listRequirements(applicationId)
-    .filter((r) => r.category !== "other" || r.filenamePattern);
+  const requirements = repos.listRequirements(applicationId);
   const documents = repos.listDocuments(applicationId);
   const previousMatches = repos.listMatches(applicationId);
   const previousConflicts = repos.listConflicts(applicationId);
@@ -25,22 +25,31 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
 
   repos.clearAnalysis(applicationId);
 
-  // Preserve previously resolved/dismissed issues by only clearing open ones (done above).
   const previousConfirmed = new Set(
     previousMatches
       .filter((m) => m.userConfirmed)
       .map((m) => `${m.requirementId}::${m.documentId}`),
   );
-  const resolvedConflictFields = new Set(
-    previousConflicts.filter((c) => c.resolved).map((c) => c.field),
+  const resolvedConflictFingerprints = new Set(
+    previousConflicts
+      .filter((c) => c.resolved)
+      .map((c) => conflictFingerprint(c.field, c.values)),
   );
 
   const matches = [];
   for (const requirement of requirements) {
-    if (requirement.category === "other" && !requirement.filenamePattern) continue;
+    if (requirement.category === "other" && requirement.dateRequirement) {
+      validateDeadlineRequirement(repos, {
+        applicationId,
+        requirement,
+      });
+      continue;
+    }
 
-    // Eligibility conditions are validated against extracted facts/profile values,
-    // not by requiring a dedicated uploaded "GPA document".
+    if (requirement.category === "other" && !requirement.filenamePattern) {
+      continue;
+    }
+
     if (
       requirement.category === "proof_of_eligibility" ||
       requirement.category === "proof_of_enrollment"
@@ -50,6 +59,26 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
         requirement,
         documents,
         organization: app.organization,
+      });
+      continue;
+    }
+
+    if (requirement.certainty === "uncertain" && !requirement.userConfirmed) {
+      repos.insertIssue({
+        id: newId(),
+        applicationId,
+        requirementId: requirement.id,
+        documentId: null,
+        severity: "needs_confirmation",
+        code: "UNCERTAIN_REQUIREMENT",
+        title: `Confirm whether "${requirement.title}" is required`,
+        explanation:
+          "ApplyReady found a document mention without clear required/optional language. Confirm the rule before treating it as mandatory.",
+        evidence: requirement.sourceEvidence,
+        recommendedFix:
+          "Confirm this requirement if the source intends it to be required, mark it optional, or dismiss if it is not an application rule.",
+        status: "open",
+        dismissible: true,
       });
       continue;
     }
@@ -293,7 +322,7 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
     }
   }
 
-  // Consistency conflicts
+  // Consistency conflicts — resolution applies to a specific value fingerprint
   const factsByDocument = documents.map((doc) => ({
     documentId: doc.id,
     filename: doc.originalFilename,
@@ -301,7 +330,8 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
   }));
   const conflictFindings = consistency.check(factsByDocument);
   for (const finding of conflictFindings) {
-    if (resolvedConflictFields.has(finding.field)) continue;
+    const fingerprint = conflictFingerprint(finding.field, finding.values);
+    if (resolvedConflictFingerprints.has(fingerprint)) continue;
     repos.insertConflict({
       id: newId(),
       applicationId,
@@ -362,7 +392,6 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
     conflicts,
   });
 
-  // Attach validation counts
   const validations = repos.listValidations(applicationId);
   report.breakdown.validationTotal = validations.length;
   report.breakdown.validationPassed = validations.filter((v) => v.passed).length;
@@ -430,6 +459,12 @@ function fixFor(rule: string): string {
   }
 }
 
+function parseGpaNumber(raw: string): number | null {
+  const n = Number(String(raw).replace(/[^\d.]/g, ""));
+  if (!Number.isFinite(n) || n <= 0 || n > 4.5) return null;
+  return n;
+}
+
 function validateEligibilityRequirement(
   repos: Repositories,
   params: {
@@ -450,53 +485,119 @@ function validateEligibilityRequirement(
       /(?:minimum|at least|gpa(?:\s+of)?)\s*(\d+(?:\.\d+)?)/i,
     );
     const minimum = minMatch ? Number(minMatch[1]) : null;
-    const gpaValues = [
-      ...(profile?.gpa ? [profile.gpa] : []),
-      ...allFacts
-        .filter((f) => f.fact.factType === "gpa")
-        .map((f) => f.fact.value),
-    ];
-    const numeric = gpaValues
-      .map((v) => Number(String(v).replace(/[^\d.]/g, "")))
-      .filter((n) => Number.isFinite(n) && n > 0 && n <= 4.5);
-    const best = numeric.length ? Math.max(...numeric) : null;
-    const passed = minimum == null ? best != null : best != null && best >= minimum;
+
+    const docGpas = allFacts
+      .filter((f) => f.fact.factType === "gpa")
+      .map((f) => ({
+        raw: f.fact.value,
+        value: parseGpaNumber(f.fact.value),
+        docId: f.doc.id,
+        source: f.doc.originalFilename,
+      }))
+      .filter((g) => g.value != null) as Array<{
+      raw: string;
+      value: number;
+      docId: string;
+      source: string;
+    }>;
+
+    let chosen: number | null = null;
+    let passed = false;
+    let unresolved = false;
+    let message = "";
+    let evidence =
+      [...docGpas.map((g) => `${g.source}: ${g.raw}`), profile?.gpa]
+        .filter(Boolean)
+        .join(" | ") || requirement.sourceEvidence;
+
+    if (profile?.userConfirmed && profile.gpa) {
+      chosen = parseGpaNumber(profile.gpa);
+      if (chosen == null) {
+        unresolved = true;
+        message = "Confirmed profile GPA could not be interpreted on a 4.0-scale.";
+      } else if (minimum == null) {
+        passed = true;
+        message = `Using confirmed profile GPA ${chosen}.`;
+      } else {
+        passed = chosen >= minimum;
+        message = passed
+          ? `Confirmed profile GPA ${chosen} meets the minimum of ${minimum}.`
+          : `Confirmed profile GPA ${chosen} is below the minimum of ${minimum}.`;
+      }
+    } else {
+      const unique = [
+        ...new Map(docGpas.map((g) => [g.value.toFixed(3), g])).values(),
+      ];
+      if (unique.length === 0) {
+        unresolved = true;
+        message =
+          "No GPA value was found in a confirmed profile or uploaded documents.";
+      } else if (unique.length > 1) {
+        const spread =
+          Math.max(...unique.map((g) => g.value)) -
+          Math.min(...unique.map((g) => g.value));
+        if (spread >= 0.05) {
+          unresolved = true;
+          message = `Conflicting GPA values were found (${unique
+            .map((g) => g.value)
+            .join(", ")}). Confirm which value ApplyReady should use.`;
+          evidence = unique.map((g) => `${g.source}: ${g.raw}`).join(" | ");
+        } else {
+          chosen = unique[0]!.value;
+        }
+      } else {
+        chosen = unique[0]!.value;
+      }
+
+      if (!unresolved && chosen != null) {
+        if (minimum == null) {
+          passed = true;
+          message = `GPA ${chosen} was found.`;
+        } else {
+          passed = chosen >= minimum;
+          message = passed
+            ? `GPA ${chosen} meets the minimum of ${minimum}.`
+            : `GPA ${chosen} is below the minimum of ${minimum}.`;
+        }
+      }
+    }
+
+    const severity = unresolved
+      ? "needs_confirmation"
+      : passed
+        ? "suggestion"
+        : "blocking";
+
     repos.insertValidation({
       id: newId(),
       applicationId,
       requirementId: requirement.id,
-      documentId:
-        allFacts.find((f) => f.fact.factType === "gpa")?.doc.id ?? null,
+      documentId: docGpas[0]?.docId ?? null,
       rule: "minimum_gpa",
-      passed,
-      severity: passed ? "suggestion" : "blocking",
-      message: passed
-        ? `GPA ${best} meets the minimum${minimum != null ? ` of ${minimum}` : ""}.`
-        : best == null
-          ? "No GPA value was found in the applicant profile or uploaded documents."
-          : `GPA ${best} is below the minimum of ${minimum}.`,
-      evidence:
-        gpaValues.join(" | ") ||
-        requirement.sourceEvidence,
+      passed: passed && !unresolved,
+      severity,
+      message,
+      evidence,
     });
-    if (!passed) {
+
+    if (!passed || unresolved) {
       repos.insertIssue({
         id: newId(),
         applicationId,
         requirementId: requirement.id,
         documentId: null,
-        severity: "blocking",
-        code: "MINIMUM_GPA",
-        title: "Minimum GPA not verified",
-        explanation:
-          best == null
-            ? "ApplyReady could not find a GPA value to compare against the minimum requirement."
-            : `Found GPA ${best}, which is below the required minimum of ${minimum}.`,
+        severity,
+        code: unresolved ? "GPA_CONFLICT" : "MINIMUM_GPA",
+        title: unresolved
+          ? "GPA requires confirmation"
+          : "Minimum GPA not verified",
+        explanation: message,
         evidence: requirement.sourceEvidence,
-        recommendedFix:
-          "Upload a transcript that includes GPA, or confirm the GPA in the applicant profile.",
+        recommendedFix: unresolved
+          ? "Confirm the correct GPA in the applicant profile (and mark the profile confirmed), then reanalyze."
+          : "Upload a transcript that includes GPA, or confirm the GPA in the applicant profile.",
         status: "open",
-        dismissible: false,
+        dismissible: unresolved,
       });
     }
     return;
@@ -506,28 +607,34 @@ function validateEligibilityRequirement(
     /enroll/i.test(requirement.title) ||
     /enroll/i.test(requirement.description)
   ) {
-    const enrollmentHints = allFacts.filter((f) =>
-      ["school", "expected_graduation_date", "enrollment"].includes(
-        f.fact.factType,
-      ),
+    const enrollmentFacts = allFacts.filter(
+      (f) =>
+        f.fact.factType === "enrollment" &&
+        /\b(enrolled|enrollment|currently attending|full[- ]time student)\b/i.test(
+          `${f.fact.value} ${f.fact.evidence || ""}`,
+        ),
     );
-    const profileHints = Boolean(
-      profile?.school || profile?.expectedGraduationDate,
-    );
-    const passed = enrollmentHints.length > 0 || profileHints;
+    const profileConfirmedEnrollment = profile?.currentlyEnrolled === true;
+    const passed =
+      enrollmentFacts.length > 0 || profileConfirmedEnrollment;
+    const severity = passed ? "suggestion" : "needs_confirmation";
+
     repos.insertValidation({
       id: newId(),
       applicationId,
       requirementId: requirement.id,
-      documentId: enrollmentHints[0]?.doc.id ?? null,
+      documentId: enrollmentFacts[0]?.doc.id ?? null,
       rule: "enrollment",
       passed,
-      severity: passed ? "suggestion" : "needs_confirmation",
+      severity,
       message: passed
-        ? "Enrollment-related evidence was found in profile or documents."
-        : "ApplyReady could not confirm enrollment from uploaded materials.",
+        ? profileConfirmedEnrollment
+          ? "Current enrollment confirmed in the applicant profile."
+          : "Explicit enrollment evidence was found in uploaded materials."
+        : "School name or expected graduation date alone does not prove current enrollment.",
       evidence: requirement.sourceEvidence,
     });
+
     if (!passed) {
       repos.insertIssue({
         id: newId(),
@@ -538,15 +645,129 @@ function validateEligibilityRequirement(
         code: "ENROLLMENT",
         title: "Enrollment could not be confirmed",
         explanation:
-          "No clear enrollment evidence was found in the applicant profile or documents.",
+          "ApplyReady needs explicit enrollment evidence or a profile confirmation of current enrollment. A school name or expected graduation date is not enough.",
         evidence: requirement.sourceEvidence,
         recommendedFix:
-          "Confirm enrollment in the applicant profile or upload a transcript/enrollment verification.",
+          "Confirm currently enrolled in the applicant profile, or upload an enrollment verification / transcript statement that explicitly indicates current enrollment.",
         status: "open",
         dismissible: true,
       });
     }
   }
+}
+
+function validateDeadlineRequirement(
+  repos: Repositories,
+  params: {
+    applicationId: string;
+    requirement: ReturnType<Repositories["listRequirements"]>[number];
+  },
+) {
+  const { applicationId, requirement } = params;
+  const raw = requirement.dateRequirement || "";
+  const assessment = assessDeadline(raw);
+
+  if (assessment.status === "ambiguous") {
+    repos.insertValidation({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId: null,
+      rule: "deadline",
+      passed: false,
+      severity: "needs_confirmation",
+      message: `Deadline "${raw}" could not be interpreted confidently (${assessment.reason}).`,
+      evidence: requirement.sourceEvidence,
+    });
+    repos.insertIssue({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId: null,
+      severity: "needs_confirmation",
+      code: "DEADLINE_AMBIGUOUS",
+      title: "Deadline needs confirmation",
+      explanation: `ApplyReady could not confidently interpret deadline "${raw}".`,
+      evidence: requirement.sourceEvidence,
+      recommendedFix:
+        "Confirm the official deadline from the source and update the requirement if needed.",
+      status: "open",
+      dismissible: true,
+    });
+    return;
+  }
+
+  if (assessment.status === "past") {
+    repos.insertValidation({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId: null,
+      rule: "deadline",
+      passed: false,
+      severity: "blocking",
+      message: `Deadline ${assessment.original} appears to be in the past.`,
+      evidence: requirement.sourceEvidence,
+    });
+    repos.insertIssue({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId: null,
+      severity: "blocking",
+      code: "DEADLINE_EXPIRED",
+      title: "Submission deadline has passed",
+      explanation: `The extracted deadline (${assessment.original}) is before today.`,
+      evidence: requirement.sourceEvidence,
+      recommendedFix:
+        "Verify whether late submissions are accepted, or update the deadline if the source was misread.",
+      status: "open",
+      dismissible: false,
+    });
+    return;
+  }
+
+  if (assessment.status === "today") {
+    repos.insertValidation({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId: null,
+      rule: "deadline",
+      passed: true,
+      severity: "needs_confirmation",
+      message: `Deadline is today (${assessment.original}). End-of-day timing was not assumed.`,
+      evidence: requirement.sourceEvidence,
+    });
+    repos.insertIssue({
+      id: newId(),
+      applicationId,
+      requirementId: requirement.id,
+      documentId: null,
+      severity: "needs_confirmation",
+      code: "DEADLINE_TODAY",
+      title: "Deadline is today",
+      explanation: `The deadline (${assessment.original}) is today. ApplyReady did not assume a timezone or end-of-day cutoff.`,
+      evidence: requirement.sourceEvidence,
+      recommendedFix:
+        "Confirm the exact cutoff time from the official source before submitting.",
+      status: "open",
+      dismissible: true,
+    });
+    return;
+  }
+
+  repos.insertValidation({
+    id: newId(),
+    applicationId,
+    requirementId: requirement.id,
+    documentId: null,
+    rule: "deadline",
+    passed: true,
+    severity: "suggestion",
+    message: `Deadline ${assessment.original} is in the future.`,
+    evidence: requirement.sourceEvidence,
+  });
 }
 
 export function createDocumentIssue(
@@ -563,5 +784,4 @@ export function createDocumentIssue(
   };
 }
 
-// keep classifier import used for potential reclassify helpers
 void HeuristicDocumentClassifier;

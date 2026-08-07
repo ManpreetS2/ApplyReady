@@ -20,7 +20,9 @@ export const JORDAN_PROFILE = {
   expectedGraduationDate: "May 2027",
   major: "Computer Science",
   gpa: "3.62",
+  currentlyEnrolled: true,
   targetOrganization: "Future Engineers Foundation",
+  userConfirmed: true,
 };
 
 export async function apiCreateApplication(
