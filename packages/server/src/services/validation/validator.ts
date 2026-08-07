@@ -4,6 +4,7 @@ import type {
   ValidationFinding,
 } from "../../providers/interfaces.js";
 import { getExtension } from "../../utils/files.js";
+import { compileFilenamePattern } from "./filenamePattern.js";
 
 const OTHER_ORG_HINTS = [
   "national merit",
@@ -58,22 +59,27 @@ export class RuleDocumentValidator implements DocumentValidator {
     }
 
     if (requirement.filenamePattern) {
-      const pattern = requirement.filenamePattern
-        .replace(/LastName/gi, "[A-Za-z]+")
-        .replace(/FirstName/gi, "[A-Za-z]+")
-        .replace(/\{[^}]+\}/g, "[A-Za-z0-9]+")
-        .replace(/\./g, "\\.");
-      const re = new RegExp(`^${pattern}$`, "i");
-      const ok = re.test(filename);
-      findings.push({
-        rule: "filename_pattern",
-        passed: ok,
-        severity: ok ? "suggestion" : "blocking",
-        message: ok
-          ? "Filename matches the required pattern."
-          : `Filename "${filename}" does not match required pattern "${requirement.filenamePattern}".`,
-        evidence: filename,
-      } as const);
+      const compiled = compileFilenamePattern(requirement.filenamePattern);
+      if (!compiled.ok) {
+        findings.push({
+          rule: "filename_pattern",
+          passed: false,
+          severity: "needs_confirmation",
+          message: `Filename pattern could not be interpreted safely: ${compiled.error}`,
+          evidence: requirement.filenamePattern,
+        } as const);
+      } else {
+        const ok = compiled.regex.test(filename);
+        findings.push({
+          rule: "filename_pattern",
+          passed: ok,
+          severity: ok ? "suggestion" : "blocking",
+          message: ok
+            ? "Filename matches the required pattern."
+            : `Filename "${filename}" does not match required pattern "${requirement.filenamePattern}".`,
+          evidence: filename,
+        } as const);
+      }
     }
 
     if (requirement.wordLimitMaximum != null && wordCount != null) {
