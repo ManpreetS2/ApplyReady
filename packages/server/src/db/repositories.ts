@@ -199,6 +199,89 @@ export class Repositories {
     return docs;
   }
 
+  /**
+   * Delete all child rows for an application without deleting the application
+   * or its applicant_profiles row. Used when swapping staged demo content.
+   */
+  clearApplicationContents(applicationId: string): DocumentRecord[] {
+    const docs = this.listDocuments(applicationId);
+    this.db
+      .prepare("DELETE FROM document_matches WHERE application_id=?")
+      .run(applicationId);
+    this.db
+      .prepare("DELETE FROM validation_results WHERE application_id=?")
+      .run(applicationId);
+    this.db
+      .prepare("DELETE FROM issues WHERE application_id=?")
+      .run(applicationId);
+    this.db
+      .prepare("DELETE FROM profile_conflicts WHERE application_id=?")
+      .run(applicationId);
+    this.db
+      .prepare("DELETE FROM documents WHERE application_id=?")
+      .run(applicationId);
+    this.db
+      .prepare("DELETE FROM requirements WHERE application_id=?")
+      .run(applicationId);
+    this.db
+      .prepare("DELETE FROM requirement_sources WHERE application_id=?")
+      .run(applicationId);
+    this.db
+      .prepare("DELETE FROM activity_events WHERE application_id=?")
+      .run(applicationId);
+    return docs;
+  }
+
+  /**
+   * Re-point all child rows from one application to another, then delete the
+   * empty source application (and its profile via CASCADE).
+   */
+  transferApplicationContents(
+    fromApplicationId: string,
+    toApplicationId: string,
+  ): void {
+    if (fromApplicationId === toApplicationId) return;
+    this.db
+      .prepare(
+        "UPDATE requirement_sources SET application_id=? WHERE application_id=?",
+      )
+      .run(toApplicationId, fromApplicationId);
+    this.db
+      .prepare("UPDATE requirements SET application_id=? WHERE application_id=?")
+      .run(toApplicationId, fromApplicationId);
+    this.db
+      .prepare("UPDATE documents SET application_id=? WHERE application_id=?")
+      .run(toApplicationId, fromApplicationId);
+    this.db
+      .prepare(
+        "UPDATE document_matches SET application_id=? WHERE application_id=?",
+      )
+      .run(toApplicationId, fromApplicationId);
+    this.db
+      .prepare(
+        "UPDATE validation_results SET application_id=? WHERE application_id=?",
+      )
+      .run(toApplicationId, fromApplicationId);
+    this.db
+      .prepare("UPDATE issues SET application_id=? WHERE application_id=?")
+      .run(toApplicationId, fromApplicationId);
+    this.db
+      .prepare(
+        "UPDATE profile_conflicts SET application_id=? WHERE application_id=?",
+      )
+      .run(toApplicationId, fromApplicationId);
+    this.db
+      .prepare(
+        "UPDATE activity_events SET application_id=? WHERE application_id=?",
+      )
+      .run(toApplicationId, fromApplicationId);
+    // Drop the staging profile so CASCADE delete of the staging app is clean.
+    this.db
+      .prepare("DELETE FROM applicant_profiles WHERE application_id=?")
+      .run(fromApplicationId);
+    this.db.prepare("DELETE FROM applications WHERE id=?").run(fromApplicationId);
+  }
+
   createSource(input: {
     applicationId: string;
     sourceType: RequirementSource["sourceType"];
