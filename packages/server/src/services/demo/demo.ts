@@ -17,6 +17,7 @@ import {
   buildDemoResumePdf,
   buildDemoTranscriptPdf,
 } from "./content.js";
+import { withDemoLock } from "./lock.js";
 
 export const DEMO_STEPS = [
   {
@@ -213,40 +214,63 @@ export async function startGuidedDemo(db: Database.Database) {
     demoStep: 0,
   });
 
-  await ingestPastedText(
-    db,
-    app.id,
-    DEMO_REQUIREMENTS_TEXT,
-    "Future Engineers Scholarship Requirements",
-  );
+  try {
+    await ingestPastedText(
+      db,
+      app.id,
+      DEMO_REQUIREMENTS_TEXT,
+      "Future Engineers Scholarship Requirements",
+    );
 
-  // Confirm extracted requirements for a clean demo path
-  for (const req of repos.listRequirements(app.id)) {
-    if (req.certainty === "uncertain") {
-      const certainty = req.category === "portfolio" ? "optional" : "required";
-      repos.updateRequirement(req.id, {
-        certainty,
-        required: certainty === "required",
-        userConfirmed: true,
-      });
-    } else {
-      repos.updateRequirement(req.id, { userConfirmed: true });
+    // Confirm extracted requirements for a clean demo path
+    for (const req of repos.listRequirements(app.id)) {
+      if (req.certainty === "uncertain") {
+        const certainty = req.category === "portfolio" ? "optional" : "required";
+        repos.updateRequirement(req.id, {
+          certainty,
+          required: certainty === "required",
+          userConfirmed: true,
+          applicability: "applicable",
+        });
+      } else {
+        repos.updateRequirement(req.id, {
+          userConfirmed: true,
+          applicability: req.conditional ? "applicable" : req.applicability,
+        });
+      }
     }
+
+    await seedInitialDemoDocs(db, app.id);
+    const analysis = analyzeApplication(db, app.id);
+    repos.updateApplication(app.id, { demoStep: 0 });
+    repos.addActivity(app.id, "demo_started", "Guided demo started");
+
+    return {
+      application: repos.getApplication(app.id),
+      step: DEMO_STEPS[0],
+      analysis,
+    };
+  } catch (error) {
+    // Compensating cleanup — do not leave partial demos.
+    try {
+      const docs = repos.deleteApplication(app.id);
+      for (const doc of docs) {
+        deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
+      }
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error ? cleanupError.message : "unknown error";
+      console.error(`[applyready] demo start cleanup failed: ${message}`);
+    }
+    throw error;
   }
-
-  await seedInitialDemoDocs(db, app.id);
-  const analysis = analyzeApplication(db, app.id);
-  repos.updateApplication(app.id, { demoStep: 0 });
-  repos.addActivity(app.id, "demo_started", "Guided demo started");
-
-  return {
-    application: repos.getApplication(app.id),
-    step: DEMO_STEPS[0],
-    analysis,
-  };
 }
 
 export async function advanceGuidedDemo(db: Database.Database, applicationId: string) {
+  return withDemoLock(applicationId, () => advanceGuidedDemoUnlocked(db, applicationId));
+}
+
+async function advanceGuidedDemoUnlocked(db: Database.Database, applicationId: string) {
   const repos = new Repositories(db);
   const app = repos.getApplication(applicationId);
   if (!app) {
@@ -397,21 +421,94 @@ async function replaceCategoryDoc(
 }
 
 export async function resetGuidedDemo(db: Database.Database, applicationId: string) {
-  const repos = new Repositories(db);
-  const app = repos.getApplication(applicationId);
-  if (!app) {
-    throw new AppError("NOT_FOUND", "Application not found.", 404, [
-      "Start a new guided demo from the landing page.",
-    ]);
-  }
-  if (!app.isDemo) {
-    throw new AppError("NOT_DEMO", "Application is not a guided demo.", 400);
-  }
-  const docs = repos.deleteApplication(applicationId);
-  for (const doc of docs) {
-    deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
-  }
-  return startGuidedDemo(db);
+  return withDemoLock(applicationId, async () => {
+    const repos = new Repositories(db);
+    const app = repos.getApplication(applicationId);
+    if (!app) {
+      throw new AppError("NOT_FOUND", "Application not found.", 404, [
+        "Start a new guided demo from the landing page.",
+      ]);
+    }
+    if (!app.isDemo) {
+      throw new AppError("NOT_DEMO", "Application is not a guided demo.", 400);
+    }
+
+    // Reset in place — preserve the same demo ID for session continuity.
+    // Only retire the old state after the replacement initialization succeeds.
+    const previousDocs = repos.listDocuments(applicationId);
+
+    // Clear analysis artifacts and matches by wiping derived state.
+    repos.clearAnalysis(applicationId);
+    for (const issue of repos.listIssues(applicationId)) {
+      repos.updateIssue(issue.id, "dismissed");
+    }
+
+    // Remove existing requirements and documents, then re-seed.
+    for (const req of repos.listRequirements(applicationId)) {
+      repos.deleteRequirement(req.id);
+    }
+    for (const doc of previousDocs) {
+      repos.deleteDocument(doc.id);
+    }
+
+    try {
+      await ingestPastedText(
+        db,
+        applicationId,
+        DEMO_REQUIREMENTS_TEXT,
+        "Future Engineers Scholarship Requirements",
+      );
+      for (const req of repos.listRequirements(applicationId)) {
+        if (req.certainty === "uncertain") {
+          const certainty = req.category === "portfolio" ? "optional" : "required";
+          repos.updateRequirement(req.id, {
+            certainty,
+            required: certainty === "required",
+            userConfirmed: true,
+            applicability: "applicable",
+          });
+        } else {
+          repos.updateRequirement(req.id, {
+            userConfirmed: true,
+            applicability: req.conditional ? "applicable" : req.applicability,
+          });
+        }
+      }
+      await seedInitialDemoDocs(db, applicationId);
+      const analysis = analyzeApplication(db, applicationId);
+      repos.updateApplication(applicationId, {
+        demoStep: 0,
+        readinessScore: analysis.report.score,
+        readinessStatus: analysis.report.status,
+        lastAnalyzedAt: analysis.report.generatedAt,
+        deadline: "2026-10-15",
+        notes: "Guided demo application packet",
+      });
+      repos.addActivity(applicationId, "demo_reset", "Guided demo reset in place");
+
+      // Delete old files only after successful re-seed.
+      for (const doc of previousDocs) {
+        deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
+      }
+
+      return {
+        application: repos.getApplication(applicationId),
+        step: DEMO_STEPS[0],
+        analysis,
+      };
+    } catch (error) {
+      // If reset fails mid-way, attempt to restore a minimal usable demo on same ID.
+      try {
+        if (repos.listDocuments(applicationId).length === 0) {
+          await seedInitialDemoDocs(db, applicationId);
+          analyzeApplication(db, applicationId);
+        }
+      } catch {
+        // swallow secondary failure
+      }
+      throw error;
+    }
+  });
 }
 
 export async function applySuggestedDemoFix(

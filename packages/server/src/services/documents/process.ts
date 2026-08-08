@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type Database from "better-sqlite3";
 import type { RequirementCategory } from "@applyready/shared";
 import { Repositories } from "../../db/repositories.js";
+import { withTransaction } from "../../db/database.js";
 import {
   assertSafeUpload,
   getExtension,
@@ -16,18 +17,33 @@ import { HeuristicDocumentClassifier } from "./classify.js";
 import { RegexDocumentFactExtractor } from "./facts.js";
 import { LocalDocumentReader } from "./readers.js";
 
-export async function processUploadedDocument(
-  db: Database.Database,
-  params: {
-    applicationId: string | null;
-    buffer: Buffer;
-    originalFilename: string;
-    mimeType: string;
-    vaultDocumentId?: string | null;
-    categoryHint?: RequirementCategory | null;
-  },
-) {
-  const repos = new Repositories(db);
+export type ParsedDocumentPayload = {
+  displayName: string;
+  safeName: string;
+  mimeType: string;
+  fileSize: number;
+  text: string;
+  pageCount: number | null;
+  wordCount: number;
+  title: string | null;
+  warnings: string[];
+  lowText: boolean;
+  category: RequirementCategory | null;
+  categoryConfidence: number;
+  classificationReasons: string[];
+  facts: ReturnType<RegexDocumentFactExtractor["extract"]>;
+  contentHash: string;
+};
+
+/**
+ * Parse/classify/extract in memory before any persistence.
+ */
+export async function parseDocumentInMemory(params: {
+  buffer: Buffer;
+  originalFilename: string;
+  mimeType: string;
+  categoryHint?: RequirementCategory | null;
+}): Promise<ParsedDocumentPayload> {
   const { extension: _ext, safeName } = assertSafeUpload({
     originalFilename: params.originalFilename,
     mimeType: params.mimeType,
@@ -35,7 +51,6 @@ export async function processUploadedDocument(
   });
   const displayName = sanitizeOriginalFilename(params.originalFilename);
 
-  // Reject files whose extension claims PDF but contents are not PDF bytes.
   if (
     getExtension(displayName) === ".pdf" ||
     params.mimeType === "application/pdf"
@@ -53,69 +68,164 @@ export async function processUploadedDocument(
     }
   }
 
-  const kind = params.applicationId ? "applications" : "vault";
-  const target = resolveUploadPath(kind, safeName);
-  fs.writeFileSync(target, params.buffer);
-
   const reader = new LocalDocumentReader();
   const classifier = new HeuristicDocumentClassifier();
   const facts = new RegexDocumentFactExtractor();
 
-  let readResult;
-  try {
-    readResult = await reader.read(
-      params.buffer,
-      displayName,
-      params.mimeType,
-    );
-  } catch (error) {
-    fs.unlinkSync(target);
-    throw error;
-  }
-
-  const classification = classifier.classify(
-    readResult.text,
+  const readResult = await reader.read(
+    params.buffer,
     displayName,
+    params.mimeType,
   );
+  const classification = classifier.classify(readResult.text, displayName);
   const wordCount = countWords(readResult.text);
-  const id = newId();
 
-  const doc = repos.createDocument({
-    id,
-    applicationId: params.applicationId,
-    vaultDocumentId: params.vaultDocumentId ?? null,
-    originalFilename: displayName,
-    storedFilename: safeName,
+  return {
+    displayName,
+    safeName,
     mimeType: params.mimeType || "application/octet-stream",
     fileSize: params.buffer.byteLength,
+    text: readResult.text,
     pageCount: readResult.pageCount,
     wordCount,
     title: readResult.title,
+    warnings: readResult.warnings,
+    lowText: readResult.lowText,
     category: params.categoryHint ?? classification.category,
     categoryConfidence: params.categoryHint
       ? Math.max(classification.confidence, 0.9)
       : classification.confidence,
-    parseStatus: readResult.lowText ? "low_text" : "parsed",
-    parsingWarnings: [
-      ...readResult.warnings,
-      ...classification.reasons.slice(0, 2),
-    ],
+    classificationReasons: classification.reasons,
+    facts: facts.extract(readResult.text),
     contentHash: hashBuffer(params.buffer),
-    text: readResult.text,
+  };
+}
+
+export async function processUploadedDocument(
+  db: Database.Database,
+  params: {
+    applicationId: string | null;
+    buffer: Buffer;
+    originalFilename: string;
+    mimeType: string;
+    vaultDocumentId?: string | null;
+    categoryHint?: RequirementCategory | null;
+  },
+) {
+  const parsed = await parseDocumentInMemory({
+    buffer: params.buffer,
+    originalFilename: params.originalFilename,
+    mimeType: params.mimeType,
+    categoryHint: params.categoryHint,
   });
 
-  repos.replaceFacts(id, facts.extract(readResult.text));
-  if (params.applicationId) {
-    repos.addActivity(
-      params.applicationId,
-      "document_uploaded",
-      `Uploaded ${doc.originalFilename}`,
-      { documentId: id, category: doc.category },
-    );
+  const kind = params.applicationId ? "applications" : "vault";
+  const target = resolveUploadPath(kind, parsed.safeName);
+  const repos = new Repositories(db);
+  const id = newId();
+
+  fs.writeFileSync(target, params.buffer);
+
+  try {
+    withTransaction(db, () => {
+      repos.createDocument({
+        id,
+        applicationId: params.applicationId,
+        vaultDocumentId: params.vaultDocumentId ?? null,
+        originalFilename: parsed.displayName,
+        storedFilename: parsed.safeName,
+        mimeType: parsed.mimeType,
+        fileSize: parsed.fileSize,
+        pageCount: parsed.pageCount,
+        wordCount: parsed.wordCount,
+        title: parsed.title,
+        category: parsed.category,
+        categoryConfidence: parsed.categoryConfidence,
+        parseStatus: parsed.lowText ? "low_text" : "parsed",
+        parsingWarnings: [
+          ...parsed.warnings,
+          ...parsed.classificationReasons.slice(0, 2),
+        ],
+        contentHash: parsed.contentHash,
+        text: parsed.text,
+      });
+      repos.replaceFacts(id, parsed.facts);
+      if (params.applicationId) {
+        repos.addActivity(
+          params.applicationId,
+          "document_uploaded",
+          `Uploaded ${parsed.displayName}`,
+          { documentId: id, category: parsed.category },
+        );
+      }
+    });
+  } catch (error) {
+    try {
+      fs.unlinkSync(target);
+    } catch {
+      // best-effort cleanup
+    }
+    throw error;
   }
 
   return {
-    document: doc,
-    summary: excerpt(readResult.text, 240),
+    document: repos.getDocument(id)!,
+    summary: excerpt(parsed.text, 240),
   };
+}
+
+/**
+ * Persist a vault document without creating a temporary applications documents row.
+ */
+export async function processVaultDocument(
+  db: Database.Database,
+  params: {
+    buffer: Buffer;
+    originalFilename: string;
+    mimeType: string;
+    category: RequirementCategory;
+    notes?: string | null;
+    expirationDate?: string | null;
+  },
+) {
+  const parsed = await parseDocumentInMemory({
+    buffer: params.buffer,
+    originalFilename: params.originalFilename,
+    mimeType: params.mimeType,
+    categoryHint: params.category,
+  });
+
+  const target = resolveUploadPath("vault", parsed.safeName);
+  const repos = new Repositories(db);
+  const id = newId();
+
+  fs.writeFileSync(target, params.buffer);
+
+  try {
+    const vault = withTransaction(db, () =>
+      repos.createVault({
+        id,
+        originalFilename: parsed.displayName,
+        storedFilename: parsed.safeName,
+        mimeType: parsed.mimeType,
+        fileSize: parsed.fileSize,
+        category: params.category,
+        version: 1,
+        notes: params.notes ?? null,
+        expirationDate: params.expirationDate ?? null,
+        wordCount: parsed.wordCount,
+        pageCount: parsed.pageCount,
+        extractedSummary: excerpt(parsed.text, 240),
+        parseStatus: parsed.lowText ? "low_text" : "parsed",
+      }),
+    );
+    return { vault, summary: excerpt(parsed.text, 240) };
+  } catch (error) {
+    try {
+      fs.unlinkSync(target);
+    } catch {
+      // best-effort cleanup
+    }
+    throw error;
+  }
 }
