@@ -17,6 +17,17 @@ function envNumber(name: string, defaultValue: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
 }
 
+/** Like envNumber but allows 0 when zero is a meaningful value (e.g. disable). */
+export function envNonNegativeNumber(
+  name: string,
+  defaultValue: number,
+): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return defaultValue;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : defaultValue;
+}
+
 function parseOrigins(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw
@@ -55,7 +66,7 @@ export const config = {
   /** Hours before unused demo applications are eligible for cleanup. */
   publicDemoTtlHours: envNumber("PUBLIC_DEMO_TTL_HOURS", 6),
   /** Interval for background stale-demo cleanup (0 disables). */
-  publicDemoCleanupIntervalMs: envNumber(
+  publicDemoCleanupIntervalMs: envNonNegativeNumber(
     "PUBLIC_DEMO_CLEANUP_INTERVAL_MS",
     isTest ? 0 : 15 * 60 * 1000,
   ),

@@ -5,9 +5,9 @@ import net from "node:net";
 import type { LookupAddress, LookupOptions } from "node:dns";
 import { FETCH_TIMEOUT_MS, MAX_FETCH_BYTES } from "@applyready/shared";
 import { AppError } from "../utils/errors.js";
-import { isPrivateIp } from "./net/privateIp.js";
+import { isGlobalUnicastIp, isPrivateIp } from "./net/privateIp.js";
 
-export { isPrivateIp } from "./net/privateIp.js";
+export { isGlobalUnicastIp, isPrivateIp } from "./net/privateIp.js";
 
 const BLOCKED_HOSTS = new Set(["localhost", "metadata.google.internal"]);
 

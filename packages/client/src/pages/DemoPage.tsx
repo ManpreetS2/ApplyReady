@@ -68,6 +68,7 @@ export function DemoPage() {
         setIssues(detail.issues);
         setStep(matched);
         setDone(demoStep >= 6);
+        setError(null);
         if (
           detail.application.readinessScore != null &&
           detail.application.readinessStatus
@@ -92,16 +93,26 @@ export function DemoPage() {
               uncertainRequirements: detail.requirements.filter(
                 (r) => !r.userConfirmed,
               ).length,
-              consistencyConflicts: detail.conflicts.filter((c) => !c.resolved)
-                .length,
+              consistencyConflicts: detail.conflicts.filter(
+                (c) => c.equivalent == null || c.equivalent === false,
+              ).length,
               factors: [],
             },
             generatedAt:
               detail.application.lastAnalyzedAt || new Date().toISOString(),
           });
         }
-      } catch {
-        rememberDemoId(null);
+      } catch (e) {
+        const code =
+          e && typeof e === "object" && "code" in e
+            ? String((e as { code: string }).code)
+            : "";
+        // Only forget the session for terminal invalid-session errors.
+        if (code === "NOT_FOUND") {
+          rememberDemoId(null);
+        } else if (!cancelled) {
+          setError(e);
+        }
       } finally {
         if (!cancelled) setRestoring(false);
       }
@@ -154,6 +165,78 @@ export function DemoPage() {
     }
   }
 
+  async function retryRestore() {
+    const savedId = readDemoId();
+    if (!savedId) return;
+    setBusy(true);
+    setError(null);
+    setRestoring(true);
+    try {
+      const [detail, stepsRes] = await Promise.all([
+        api.getApplication(savedId),
+        api.demoSteps(),
+      ]);
+      if (!detail.application.isDemo) {
+        rememberDemoId(null);
+        return;
+      }
+      const demoStep = detail.application.demoStep ?? 0;
+      const matched =
+        stepsRes.steps.find((item) => item.step === demoStep) ||
+        stepsRes.steps[0] ||
+        null;
+      setApplication(detail.application);
+      setIssues(detail.issues);
+      setStep(matched);
+      setDone(demoStep >= 6);
+      if (
+        detail.application.readinessScore != null &&
+        detail.application.readinessStatus
+      ) {
+        setReport({
+          applicationId: detail.application.id,
+          score: detail.application.readinessScore,
+          status: detail.application.readinessStatus,
+          breakdown: {
+            requiredPresent: 0,
+            requiredTotal: detail.requirements.filter((r) => r.required).length,
+            confirmedMatches: detail.matches.filter((m) => m.userConfirmed).length,
+            likelyMatches: detail.matches.filter((m) => m.status === "likely").length,
+            validationPassed: detail.validations.filter((v) => v.passed).length,
+            validationTotal: detail.validations.length,
+            blockingIssues: detail.issues.filter(
+              (i) => i.status === "open" && i.severity === "blocking",
+            ).length,
+            warnings: detail.issues.filter(
+              (i) => i.status === "open" && i.severity === "warning",
+            ).length,
+            uncertainRequirements: detail.requirements.filter(
+              (r) => !r.userConfirmed,
+            ).length,
+            consistencyConflicts: detail.conflicts.filter(
+              (c) => c.equivalent == null || c.equivalent === false,
+            ).length,
+            factors: [],
+          },
+          generatedAt:
+            detail.application.lastAnalyzedAt || new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      const code =
+        e && typeof e === "object" && "code" in e
+          ? String((e as { code: string }).code)
+          : "";
+      if (code === "NOT_FOUND") {
+        rememberDemoId(null);
+      }
+      setError(e);
+    } finally {
+      setBusy(false);
+      setRestoring(false);
+    }
+  }
+
   if (restoring) {
     return (
       <p
@@ -186,6 +269,16 @@ export function DemoPage() {
       </div>
 
       <ErrorBanner error={error} />
+      {error && !application && readDemoId() ? (
+        <button
+          type="button"
+          className="btn-secondary"
+          disabled={busy}
+          onClick={() => void retryRestore()}
+        >
+          Retry restore
+        </button>
+      ) : null}
       {busy ? (
         <p className="sr-only" role="status" aria-live="polite">
           Updating guided demo…

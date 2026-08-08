@@ -1,7 +1,8 @@
 import net from "node:net";
 
 /**
- * CIDR-correct private / non-public IP classification for SSRF defenses.
+ * Global-unicast IP classification for SSRF defenses.
+ * Only globally routable unicast addresses are allowed.
  */
 
 function parseIpv4Octets(ip: string): [number, number, number, number] | null {
@@ -36,30 +37,43 @@ function inIpv4Cidr(
   return (ip & mask) === (baseInt & mask);
 }
 
-function isPrivateIpv4(octets: [number, number, number, number]): boolean {
+function isGlobalUnicastIpv4(octets: [number, number, number, number]): boolean {
   const ip = ipv4ToInt(octets);
   // 0.0.0.0/8 unspecified
-  if (inIpv4Cidr(ip, [0, 0, 0, 0], 8)) return true;
+  if (inIpv4Cidr(ip, [0, 0, 0, 0], 8)) return false;
   // 127.0.0.0/8 loopback
-  if (inIpv4Cidr(ip, [127, 0, 0, 0], 8)) return true;
+  if (inIpv4Cidr(ip, [127, 0, 0, 0], 8)) return false;
   // 10.0.0.0/8
-  if (inIpv4Cidr(ip, [10, 0, 0, 0], 8)) return true;
+  if (inIpv4Cidr(ip, [10, 0, 0, 0], 8)) return false;
   // 172.16.0.0/12
-  if (inIpv4Cidr(ip, [172, 16, 0, 0], 12)) return true;
+  if (inIpv4Cidr(ip, [172, 16, 0, 0], 12)) return false;
   // 192.168.0.0/16
-  if (inIpv4Cidr(ip, [192, 168, 0, 0], 16)) return true;
+  if (inIpv4Cidr(ip, [192, 168, 0, 0], 16)) return false;
   // 169.254.0.0/16 link-local
-  if (inIpv4Cidr(ip, [169, 254, 0, 0], 16)) return true;
+  if (inIpv4Cidr(ip, [169, 254, 0, 0], 16)) return false;
   // 100.64.0.0/10 CGNAT
-  if (inIpv4Cidr(ip, [100, 64, 0, 0], 10)) return true;
-  return false;
+  if (inIpv4Cidr(ip, [100, 64, 0, 0], 10)) return false;
+  // 192.0.0.0/24 IETF protocol assignments
+  if (inIpv4Cidr(ip, [192, 0, 0, 0], 24)) return false;
+  // 192.0.2.0/24 TEST-NET-1
+  if (inIpv4Cidr(ip, [192, 0, 2, 0], 24)) return false;
+  // 198.51.100.0/24 TEST-NET-2
+  if (inIpv4Cidr(ip, [198, 51, 100, 0], 24)) return false;
+  // 203.0.113.0/24 TEST-NET-3
+  if (inIpv4Cidr(ip, [203, 0, 113, 0], 24)) return false;
+  // 198.18.0.0/15 benchmark
+  if (inIpv4Cidr(ip, [198, 18, 0, 0], 15)) return false;
+  // 224.0.0.0/4 multicast
+  if (inIpv4Cidr(ip, [224, 0, 0, 0], 4)) return false;
+  // 240.0.0.0/4 reserved
+  if (inIpv4Cidr(ip, [240, 0, 0, 0], 4)) return false;
+  return true;
 }
 
 /** Expand IPv6 textual form to 8 hextets (0–65535). */
 function parseIpv6Hextets(ip: string): number[] | null {
   const lower = ip.toLowerCase();
   if (lower.includes(".")) {
-    // Embedded IPv4 (e.g. ::ffff:127.0.0.1) — handled by caller via mapped path.
     return null;
   }
 
@@ -106,11 +120,9 @@ function inIpv6Cidr(addr: bigint, prefix: bigint, prefixLen: number): boolean {
 }
 
 function parseIpv4MappedFromIpv6(normalized: string): [number, number, number, number] | null {
-  // ::ffff:127.0.0.1
   const dotted = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
   if (dotted?.[1]) return parseIpv4Octets(dotted[1]);
 
-  // ::ffff:7f00:1 (hex form)
   const hex = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
   if (hex) {
     const hi = parseInt(hex[1]!, 16);
@@ -118,7 +130,6 @@ function parseIpv4MappedFromIpv6(normalized: string): [number, number, number, n
     return [(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff];
   }
 
-  // Fully expanded forms containing ffff then IPv4
   const hextets = parseIpv6Hextets(normalized);
   if (
     hextets &&
@@ -136,37 +147,58 @@ function parseIpv4MappedFromIpv6(normalized: string): [number, number, number, n
   return null;
 }
 
-function isPrivateIpv6(normalized: string): boolean {
+function isGlobalUnicastIpv6(normalized: string): boolean {
   const mapped = parseIpv4MappedFromIpv6(normalized);
-  if (mapped) return isPrivateIpv4(mapped);
+  if (mapped) return isGlobalUnicastIpv4(mapped);
 
   const hextets = parseIpv6Hextets(normalized);
   if (!hextets) {
-    // Unparseable IPv6 → treat as blocked.
-    return true;
+    return false;
   }
   const addr = hextetsToBigInt(hextets);
 
   // ::/128 unspecified
-  if (addr === 0n) return true;
+  if (addr === 0n) return false;
   // ::1/128 loopback
-  if (addr === 1n) return true;
+  if (addr === 1n) return false;
   // fc00::/7 unique local
-  if (inIpv6Cidr(addr, 0xfc00_0000_0000_0000_0000_0000_0000_0000n, 7)) return true;
-  // fe80::/10 link-local (covers fe80–febf)
-  if (inIpv6Cidr(addr, 0xfe80_0000_0000_0000_0000_0000_0000_0000n, 10)) return true;
+  if (inIpv6Cidr(addr, 0xfc00_0000_0000_0000_0000_0000_0000_0000n, 7)) return false;
+  // fe80::/10 link-local
+  if (inIpv6Cidr(addr, 0xfe80_0000_0000_0000_0000_0000_0000_0000n, 10)) return false;
+  // ff00::/8 multicast
+  if (inIpv6Cidr(addr, 0xff00_0000_0000_0000_0000_0000_0000_0000n, 8)) return false;
+  // 2001:db8::/32 documentation
+  if (inIpv6Cidr(addr, 0x2001_0db8_0000_0000_0000_0000_0000_0000n, 32)) return false;
+  // ::ffff:0:0/96 already handled via mapped path when parseable
+  // IPv4-compatible deprecated ::/96 (excluding :: and ::1) — treat non-global
+  if (
+    hextets[0] === 0 &&
+    hextets[1] === 0 &&
+    hextets[2] === 0 &&
+    hextets[3] === 0 &&
+    hextets[4] === 0 &&
+    hextets[5] === 0
+  ) {
+    return false;
+  }
 
-  return false;
+  return true;
 }
 
-export function isPrivateIp(ip: string): boolean {
+/** True only for globally routable unicast addresses. */
+export function isGlobalUnicastIp(ip: string): boolean {
   const normalized = ip.replace(/^\[|\]$/g, "").toLowerCase();
   const kind = net.isIP(normalized);
-  if (kind === 0) return true;
+  if (kind === 0) return false;
   if (kind === 4) {
     const octets = parseIpv4Octets(normalized);
-    if (!octets) return true;
-    return isPrivateIpv4(octets);
+    if (!octets) return false;
+    return isGlobalUnicastIpv4(octets);
   }
-  return isPrivateIpv6(normalized);
+  return isGlobalUnicastIpv6(normalized);
+}
+
+/** Compatibility: true when the address must be blocked for SSRF. */
+export function isPrivateIp(ip: string): boolean {
+  return !isGlobalUnicastIp(ip);
 }
