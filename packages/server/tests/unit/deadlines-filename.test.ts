@@ -90,19 +90,36 @@ describe("filename pattern safety", () => {
 describe("deadline assessment", () => {
   const noon = (isoDate: string) => new Date(`${isoDate}T12:00:00.000Z`);
 
-  it("marks yesterday as past", () => {
+  it("marks a date past only after it ended in every inhabited offset", () => {
+    // End of 2026-08-06 in UTC−12 is 2026-08-07T12:00:00Z.
     const result = assessDeadline("2026-08-06", noon("2026-08-07"));
     expect(result.status).toBe("past");
   });
 
-  it("marks today conservatively as today", () => {
+  it("does not mark date-only expired near UTC midnight due to TZ choice", () => {
+    // 30 minutes after UTC midnight on Aug 7 — Aug 6 is still current in UTC−12.
+    const result = assessDeadline(
+      "2026-08-06",
+      new Date("2026-08-07T00:30:00.000Z"),
+    );
+    expect(result.status).toBe("today");
+  });
+
+  it("marks date-only as today while inside the worldwide envelope", () => {
     const result = assessDeadline("August 7, 2026", noon("2026-08-07"));
     expect(result.status).toBe("today");
   });
 
-  it("marks tomorrow as future", () => {
-    const result = assessDeadline("2026-08-08", noon("2026-08-07"));
+  it("marks far-future date-only as future before any offset reaches it", () => {
+    // Aug 9 earliest start is Aug 8 10:00 UTC; noon Aug 7 is clearly before.
+    const result = assessDeadline("2026-08-09", noon("2026-08-07"));
     expect(result.status).toBe("future");
+  });
+
+  it("treats date that has begun only in positive offsets as today, not future", () => {
+    // Aug 8 begins at Aug 7 10:00 UTC in UTC+14; noon Aug 7 is inside envelope.
+    const result = assessDeadline("2026-08-08", noon("2026-08-07"));
+    expect(result.status).toBe("today");
   });
 
   it("marks invalid dates as ambiguous", () => {
@@ -110,12 +127,36 @@ describe("deadline assessment", () => {
     expect(result.status).toBe("ambiguous");
   });
 
-  it("supports explicit timezone timestamps", () => {
+  it("compares explicit timezone timestamps as exact instants", () => {
     const result = assessDeadline(
       "2026-08-06T23:00:00-07:00",
       new Date("2026-08-07T12:00:00.000Z"),
     );
     expect(result.status).toBe("past");
+  });
+
+  it("keeps an explicit future offset timestamp as future", () => {
+    const result = assessDeadline(
+      "2026-08-08T12:00:00+02:00",
+      new Date("2026-08-07T12:00:00.000Z"),
+    );
+    expect(result.status).toBe("future");
+  });
+});
+
+describe("filename placeholder casing", () => {
+  it("accepts LastName / LASTNAME / lastname and FirstName variants", () => {
+    for (const pattern of [
+      "LastName_FirstName.pdf",
+      "LASTNAME_FIRSTNAME.pdf",
+      "lastname_firstname.pdf",
+      "LastName_firstname.pdf",
+    ]) {
+      const compiled = compileFilenamePattern(pattern);
+      expect(compiled.ok).toBe(true);
+      if (!compiled.ok) return;
+      expect(compiled.regex.test("Chen_Alex.pdf")).toBe(true);
+    }
   });
 });
 

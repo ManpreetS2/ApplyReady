@@ -301,18 +301,55 @@ export function NewApplicationPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={async () => {
-                      const updated = await api.confirmRequirement(req.id);
-                      setRequirements((list) =>
-                        list.map((r) => (r.id === req.id ? updated.requirement : r)),
-                      );
-                    }}
-                  >
-                    Confirm
-                  </button>
+                  {req.certainty === "uncertain" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={async () => {
+                          const updated = await api.confirmRequirement(req.id, {
+                            certainty: "required",
+                          });
+                          setRequirements((list) =>
+                            list.map((r) =>
+                              r.id === req.id ? updated.requirement : r,
+                            ),
+                          );
+                        }}
+                      >
+                        Mark required
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={async () => {
+                          const updated = await api.confirmRequirement(req.id, {
+                            certainty: "optional",
+                          });
+                          setRequirements((list) =>
+                            list.map((r) =>
+                              r.id === req.id ? updated.requirement : r,
+                            ),
+                          );
+                        }}
+                      >
+                        Mark optional
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={async () => {
+                        const updated = await api.confirmRequirement(req.id);
+                        setRequirements((list) =>
+                          list.map((r) => (r.id === req.id ? updated.requirement : r)),
+                        );
+                      }}
+                    >
+                      Confirm
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn-ghost"

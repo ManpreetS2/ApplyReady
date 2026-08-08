@@ -126,9 +126,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  confirmRequirement: (id: string) =>
+  confirmRequirement: (
+    id: string,
+    body?: { certainty?: "required" | "optional" },
+  ) =>
     request<{ requirement: Requirement }>(`/api/requirements/${id}/confirm`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
     }),
   deleteRequirement: (id: string) =>
     request<{ ok: boolean }>(`/api/requirements/${id}`, { method: "DELETE" }),

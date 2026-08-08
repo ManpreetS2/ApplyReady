@@ -343,7 +343,37 @@ export function ApplicationDetailPage() {
                   </ul>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
-                  {!readOnly && !req.userConfirmed ? (
+                  {!readOnly && req.certainty === "uncertain" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={async () => {
+                          await api.confirmRequirement(req.id, {
+                            certainty: "required",
+                          });
+                          await load();
+                        }}
+                      >
+                        Mark required
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={async () => {
+                          await api.confirmRequirement(req.id, {
+                            certainty: "optional",
+                          });
+                          await load();
+                        }}
+                      >
+                        Mark optional
+                      </button>
+                    </>
+                  ) : null}
+                  {!readOnly &&
+                  req.certainty !== "uncertain" &&
+                  !req.userConfirmed ? (
                     <button
                       type="button"
                       className="btn-secondary"

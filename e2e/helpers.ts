@@ -55,15 +55,26 @@ export async function apiAddTextSource(
     data: { text, sourceName },
   });
   expect(res.ok()).toBeTruthy();
-  return (await res.json()).requirements as Array<{ id: string; title: string }>;
+  return (await res.json()).requirements as Array<{
+    id: string;
+    title: string;
+    certainty?: "required" | "optional" | "uncertain";
+  }>;
 }
 
 export async function apiConfirmAllRequirements(
   request: APIRequestContext,
-  requirements: Array<{ id: string }>,
+  requirements: Array<{
+    id: string;
+    certainty?: "required" | "optional" | "uncertain";
+  }>,
 ) {
   for (const req of requirements) {
-    const res = await request.post(`/api/requirements/${req.id}/confirm`);
+    const data =
+      req.certainty === "uncertain" ? { certainty: "required" as const } : {};
+    const res = await request.post(`/api/requirements/${req.id}/confirm`, {
+      data,
+    });
     expect(res.ok()).toBeTruthy();
   }
 }

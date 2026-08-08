@@ -1,6 +1,12 @@
 /**
  * Conservative deadline assessment.
- * Does not invent timezones. Date-only values compare calendar days only.
+ * Does not invent a timezone for date-only values.
+ *
+ * Exact timestamps with an explicit offset/Z are compared as instants.
+ * Date-only values use a worldwide timezone envelope (UTC−12 … UTC+14):
+ * - past only when the calendar date has ended in every inhabited offset
+ * - future only when the calendar date has not begun in any offset
+ * - otherwise today / needs-confirmation (never prematurely expired)
  */
 
 export type DeadlineAssessment =
@@ -15,6 +21,11 @@ export type DeadlineAssessment =
       original: string;
       reason: string;
     };
+
+/** Latest inhabited offset still used for calendar-day envelopes. */
+const MAX_POSITIVE_OFFSET_HOURS = 14;
+/** Earliest inhabited offset still used for calendar-day envelopes. */
+const MAX_NEGATIVE_OFFSET_HOURS = 12;
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -61,6 +72,27 @@ function parseDateOnlyParts(
   return iso;
 }
 
+/**
+ * Instant when calendar date D first begins somewhere (UTC+14 midnight).
+ * D 00:00 in UTC+14 = (D − 1 day) 10:00 UTC.
+ */
+function dateOnlyEarliestStartUtc(dateOnly: string): Date {
+  const start = new Date(`${dateOnly}T00:00:00.000Z`);
+  start.setUTCHours(start.getUTCHours() - MAX_POSITIVE_OFFSET_HOURS);
+  return start;
+}
+
+/**
+ * Instant when calendar date D has ended everywhere (UTC−12 end-of-day).
+ * End of D in UTC−12 = (D + 1 day) 12:00 UTC.
+ */
+function dateOnlyLatestEndUtc(dateOnly: string): Date {
+  const end = new Date(`${dateOnly}T00:00:00.000Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  end.setUTCHours(MAX_NEGATIVE_OFFSET_HOURS, 0, 0, 0);
+  return end;
+}
+
 export function assessDeadline(
   raw: string,
   now = new Date(),
@@ -70,7 +102,7 @@ export function assessDeadline(
     return { status: "ambiguous", original, reason: "Empty deadline value" };
   }
 
-  // Explicit timezone / offset timestamps
+  // Explicit timezone / offset timestamps — compare exact instant.
   const withTz =
     original.match(
       /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)(Z|[+-]\d{2}:?\d{2})$/i,
@@ -88,15 +120,6 @@ export function assessDeadline(
     if (instant.getTime() < now.getTime()) {
       return {
         status: "past",
-        original,
-        dateOnly: false,
-        comparable: instant.toISOString(),
-      };
-    }
-    if (utcDateOnly(instant) === utcDateOnly(now)) {
-      // Same UTC calendar day but future clock time → treat as future.
-      return {
-        status: "future",
         original,
         dateOnly: false,
         comparable: instant.toISOString(),
@@ -150,8 +173,18 @@ export function assessDeadline(
     };
   }
 
-  const today = utcDateOnly(now);
-  if (dateOnly < today) {
+  const earliestStart = dateOnlyEarliestStartUtc(dateOnly);
+  const latestEnd = dateOnlyLatestEndUtc(dateOnly);
+
+  if (now.getTime() < earliestStart.getTime()) {
+    return {
+      status: "future",
+      original,
+      dateOnly: true,
+      comparable: dateOnly,
+    };
+  }
+  if (now.getTime() >= latestEnd.getTime()) {
     return {
       status: "past",
       original,
@@ -159,17 +192,10 @@ export function assessDeadline(
       comparable: dateOnly,
     };
   }
-  if (dateOnly === today) {
-    // Ambiguous end-of-day semantics — do not prematurely mark expired.
-    return {
-      status: "today",
-      original,
-      dateOnly: true,
-      comparable: dateOnly,
-    };
-  }
+
+  // Inside the worldwide envelope for this calendar date — do not assume a cutoff TZ.
   return {
-    status: "future",
+    status: "today",
     original,
     dateOnly: true,
     comparable: dateOnly,

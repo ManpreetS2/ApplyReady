@@ -1,6 +1,6 @@
 /**
  * Compile a safe filename template into a RegExp.
- * Supports LastName, FirstName, and {placeholder} tokens.
+ * Supports LastName / FirstName (any casing) and {placeholder} tokens.
  * All other characters are treated as literals (regex metacharacters escaped).
  */
 export function compileFilenamePattern(
@@ -10,22 +10,18 @@ export function compileFilenamePattern(
     let i = 0;
     let body = "";
     while (i < pattern.length) {
-      if (pattern.startsWith("LastName", i) || pattern.startsWith("lastname", i)) {
-        // Case-insensitive match for the token spelling variants
-        const slice = pattern.slice(i, i + 8);
-        if (/^lastname$/i.test(slice)) {
-          body += "[A-Za-z]+";
-          i += 8;
-          continue;
-        }
+      const remaining = pattern.slice(i);
+      const lastName = remaining.match(/^lastname/i);
+      if (lastName) {
+        body += "[A-Za-z]+";
+        i += lastName[0].length;
+        continue;
       }
-      if (pattern.startsWith("FirstName", i) || pattern.startsWith("firstname", i)) {
-        const slice = pattern.slice(i, i + 9);
-        if (/^firstname$/i.test(slice)) {
-          body += "[A-Za-z]+";
-          i += 9;
-          continue;
-        }
+      const firstName = remaining.match(/^firstname/i);
+      if (firstName) {
+        body += "[A-Za-z]+";
+        i += firstName[0].length;
+        continue;
       }
       if (pattern[i] === "{") {
         const end = pattern.indexOf("}", i + 1);

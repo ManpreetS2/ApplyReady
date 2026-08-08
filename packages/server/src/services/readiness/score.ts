@@ -12,6 +12,7 @@ const ELIGIBILITY_ISSUE_CODES = new Set([
   "MINIMUM_GPA",
   "GPA_CONFLICT",
   "ENROLLMENT",
+  "ENROLLMENT_FAILED",
   "DEADLINE_EXPIRED",
   "DEADLINE_AMBIGUOUS",
   "DEADLINE_TODAY",
@@ -23,6 +24,15 @@ function isDocumentRequirement(r: Requirement): boolean {
     r.category !== "other" &&
     r.category !== "proof_of_eligibility" &&
     r.category !== "proof_of_enrollment"
+  );
+}
+
+function isEligibilityOrDeadlineRequirement(r: Requirement): boolean {
+  return (
+    r.required &&
+    (r.category === "proof_of_eligibility" ||
+      r.category === "proof_of_enrollment" ||
+      (r.category === "other" && Boolean(r.dateRequirement)))
   );
 }
 
@@ -48,6 +58,9 @@ export function computeReadiness(params: {
     (i) =>
       ELIGIBILITY_ISSUE_CODES.has(i.code) &&
       (i.severity === "blocking" || i.severity === "needs_confirmation"),
+  );
+  const hasEligibilityOrDeadline = requirements.some(
+    isEligibilityOrDeadlineRequirement,
   );
 
   const bestByRequirement = new Map<string, DocumentMatch>();
@@ -173,19 +186,37 @@ export function computeReadiness(params: {
     eligibilityUnresolved.length > 0 ||
     uncertainRequirementIssues.length > 0;
 
+  /**
+   * Status ordering:
+   * 1. Known hard failures (including eligibility/deadline) win over "no documents".
+   * 2. Unresolved eligibility / uncertain requirements → needs_attention.
+   * 3. Eligibility-only apps with all checks passing → ready (documented).
+   * 4. Empty apps with nothing to evaluate → unable_to_determine.
+   */
   let status: ReadinessStatus;
-  if (required.length === 0 && matches.length === 0) {
-    status = "unable_to_determine";
-    score = Math.min(score, 40);
-  } else if (hardBlock || score < 55) {
+  if (hardBlock) {
     status = "not_ready";
-    if (hardBlock) score = Math.min(score, 54);
+    score = Math.min(score, 54);
   } else if (
-    score < 75 ||
-    warnings.length > 0 ||
-    uncertainRequirements > 0 ||
-    eligibilityUnresolved.length > 0
+    eligibilityUnresolved.length > 0 ||
+    uncertainRequirementIssues.length > 0
   ) {
+    status = "needs_attention";
+  } else if (required.length === 0 && matches.length === 0) {
+    if (hasEligibilityOrDeadline) {
+      // Required eligibility/deadline checks exist and none are unresolved/failed.
+      status = "ready";
+    } else if (requirements.length === 0) {
+      status = "unable_to_determine";
+      score = Math.min(score, 40);
+    } else {
+      // Only optional/uncertain non-eligibility items with no matches.
+      status = "unable_to_determine";
+      score = Math.min(score, 40);
+    }
+  } else if (score < 55) {
+    status = "not_ready";
+  } else if (score < 75 || warnings.length > 0 || uncertainRequirements > 0) {
     status = "needs_attention";
   } else if (score < 90 || likelyMatches > 0) {
     status = "nearly_ready";
@@ -195,10 +226,7 @@ export function computeReadiness(params: {
 
   if (hardBlock && status === "ready") status = "not_ready";
   if (preventsReady && status === "ready") {
-    status =
-      hardBlock || eligibilityUnresolved.some((i) => i.severity === "blocking")
-        ? "not_ready"
-        : "needs_attention";
+    status = hardBlock ? "not_ready" : "needs_attention";
   }
   if (
     status === "ready" &&
@@ -208,7 +236,7 @@ export function computeReadiness(params: {
       eligibilityUnresolved.length > 0 ||
       uncertainRequirementIssues.length > 0)
   ) {
-    status = "not_ready";
+    status = hardBlock ? "not_ready" : "needs_attention";
   }
 
   return {
