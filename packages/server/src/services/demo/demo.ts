@@ -130,7 +130,15 @@ async function confirmLikelyMatches(db: Database.Database, applicationId: string
     }
   }
   for (const req of requirements) {
-    if (!req.userConfirmed) {
+    if (req.certainty === "uncertain") {
+      const certainty = req.category === "portfolio" ? "optional" : "required";
+      repos.updateRequirement(req.id, {
+        certainty,
+        required: certainty === "required",
+        userConfirmed: true,
+        confidence: 0.95,
+      });
+    } else if (!req.userConfirmed) {
       repos.updateRequirement(req.id, { userConfirmed: true, confidence: 0.95 });
     }
   }
@@ -214,7 +222,16 @@ export async function startGuidedDemo(db: Database.Database) {
 
   // Confirm extracted requirements for a clean demo path
   for (const req of repos.listRequirements(app.id)) {
-    repos.updateRequirement(req.id, { userConfirmed: true });
+    if (req.certainty === "uncertain") {
+      const certainty = req.category === "portfolio" ? "optional" : "required";
+      repos.updateRequirement(req.id, {
+        certainty,
+        required: certainty === "required",
+        userConfirmed: true,
+      });
+    } else {
+      repos.updateRequirement(req.id, { userConfirmed: true });
+    }
   }
 
   await seedInitialDemoDocs(db, app.id);

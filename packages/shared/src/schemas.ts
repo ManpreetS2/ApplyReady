@@ -74,6 +74,11 @@ export const updateRequirementSchema = createRequirementSchema.partial().extend(
   userConfirmed: z.boolean().optional(),
 });
 
+/** Confirm a requirement. Uncertain items must explicitly resolve to required or optional. */
+export const confirmRequirementSchema = z.object({
+  certainty: z.enum(["required", "optional"]).optional(),
+});
+
 export const updateMatchSchema = z.object({
   status: z
     .enum(["confirmed", "likely", "possible", "does_not_match", "needs_confirmation"])

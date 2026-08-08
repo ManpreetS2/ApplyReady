@@ -63,7 +63,7 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       continue;
     }
 
-    if (requirement.certainty === "uncertain" && !requirement.userConfirmed) {
+    if (requirement.certainty === "uncertain") {
       repos.insertIssue({
         id: newId(),
         applicationId,
@@ -73,10 +73,10 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
         code: "UNCERTAIN_REQUIREMENT",
         title: `Confirm whether "${requirement.title}" is required`,
         explanation:
-          "ApplyReady found a document mention without clear required/optional language. Confirm the rule before treating it as mandatory.",
+          "ApplyReady found a document mention without clear required/optional language. Choose required or optional before treating this as settled.",
         evidence: requirement.sourceEvidence,
         recommendedFix:
-          "Confirm this requirement if the source intends it to be required, mark it optional, or dismiss if it is not an application rule.",
+          "Resolve this requirement as required or optional. Confirming alone is not enough while certainty remains uncertain.",
         status: "open",
         dismissible: true,
       });
@@ -614,10 +614,44 @@ function validateEligibilityRequirement(
           `${f.fact.value} ${f.fact.evidence || ""}`,
         ),
     );
-    const profileConfirmedEnrollment = profile?.currentlyEnrolled === true;
-    const passed =
-      enrollmentFacts.length > 0 || profileConfirmedEnrollment;
-    const severity = passed ? "suggestion" : "needs_confirmation";
+
+    let passed = false;
+    let severity: "suggestion" | "blocking" | "needs_confirmation" =
+      "needs_confirmation";
+    let message =
+      "School name or expected graduation date alone does not prove current enrollment.";
+    let issueCode = "ENROLLMENT";
+    let issueTitle = "Enrollment could not be confirmed";
+    let issueExplanation =
+      "ApplyReady needs explicit enrollment evidence or a confirmed profile enrollment value. A school name or expected graduation date is not enough.";
+    let recommendedFix =
+      "Confirm current enrollment in the applicant profile (set currently enrolled and save/confirm the profile), or upload enrollment verification that explicitly indicates current enrollment.";
+
+    if (enrollmentFacts.length > 0) {
+      passed = true;
+      severity = "suggestion";
+      message =
+        "Explicit enrollment evidence was found in uploaded materials.";
+    } else if (profile?.userConfirmed && profile.currentlyEnrolled === true) {
+      passed = true;
+      severity = "suggestion";
+      message =
+        "Current enrollment confirmed in the applicant profile.";
+    } else if (profile?.userConfirmed && profile.currentlyEnrolled === false) {
+      passed = false;
+      severity = "blocking";
+      issueCode = "ENROLLMENT_FAILED";
+      issueTitle = "Not currently enrolled";
+      message =
+        "Confirmed applicant profile states the applicant is not currently enrolled.";
+      issueExplanation = message;
+      recommendedFix =
+        "If enrollment status changed, update and confirm the applicant profile, then reanalyze.";
+    } else {
+      // currentlyEnrolled null/undefined or profile not confirmed
+      passed = false;
+      severity = "needs_confirmation";
+    }
 
     repos.insertValidation({
       id: newId(),
@@ -627,11 +661,7 @@ function validateEligibilityRequirement(
       rule: "enrollment",
       passed,
       severity,
-      message: passed
-        ? profileConfirmedEnrollment
-          ? "Current enrollment confirmed in the applicant profile."
-          : "Explicit enrollment evidence was found in uploaded materials."
-        : "School name or expected graduation date alone does not prove current enrollment.",
+      message,
       evidence: requirement.sourceEvidence,
     });
 
@@ -641,16 +671,14 @@ function validateEligibilityRequirement(
         applicationId,
         requirementId: requirement.id,
         documentId: null,
-        severity: "needs_confirmation",
-        code: "ENROLLMENT",
-        title: "Enrollment could not be confirmed",
-        explanation:
-          "ApplyReady needs explicit enrollment evidence or a profile confirmation of current enrollment. A school name or expected graduation date is not enough.",
+        severity,
+        code: issueCode,
+        title: issueTitle,
+        explanation: issueExplanation,
         evidence: requirement.sourceEvidence,
-        recommendedFix:
-          "Confirm currently enrolled in the applicant profile, or upload an enrollment verification / transcript statement that explicitly indicates current enrollment.",
+        recommendedFix,
         status: "open",
-        dismissible: true,
+        dismissible: severity !== "blocking",
       });
     }
   }

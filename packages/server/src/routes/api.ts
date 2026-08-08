@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   assignDocumentSchema,
+  confirmRequirementSchema,
   createApplicationSchema,
   createRequirementSchema,
   mergeRequirementsSchema,
@@ -335,7 +336,34 @@ export function createApiRouter(db: Database.Database): Router {
       if (!current) {
         throw new AppError("NOT_FOUND", "Requirement not found.", 404);
       }
+      const body = confirmRequirementSchema.parse(req.body ?? {});
+      if (current.certainty === "uncertain") {
+        if (!body.certainty) {
+          throw new AppError(
+            "CERTAINTY_REQUIRED",
+            "Uncertain requirements must be resolved as required or optional.",
+            400,
+            [
+              "Send { \"certainty\": \"required\" } or { \"certainty\": \"optional\" } when confirming.",
+            ],
+          );
+        }
+        const requirement = repos.updateRequirement(req.params.id!, {
+          certainty: body.certainty,
+          required: body.certainty === "required",
+          userConfirmed: true,
+          confidence: Math.max(current.confidence, 0.9),
+        });
+        res.json({ requirement });
+        return;
+      }
       const requirement = repos.updateRequirement(req.params.id!, {
+        ...(body.certainty
+          ? {
+              certainty: body.certainty,
+              required: body.certainty === "required",
+            }
+          : {}),
         userConfirmed: true,
         confidence: Math.max(current.confidence, 0.9),
       });

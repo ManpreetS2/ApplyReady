@@ -5,6 +5,9 @@ import net from "node:net";
 import type { LookupAddress, LookupOptions } from "node:dns";
 import { FETCH_TIMEOUT_MS, MAX_FETCH_BYTES } from "@applyready/shared";
 import { AppError } from "../utils/errors.js";
+import { isPrivateIp } from "./net/privateIp.js";
+
+export { isPrivateIp } from "./net/privateIp.js";
 
 const BLOCKED_HOSTS = new Set(["localhost", "metadata.google.internal"]);
 
@@ -35,41 +38,6 @@ export function setUrlFetchTestHooks(hooks: {
     lookupAllImpl = (hostname, options) => dns.lookup(hostname, options);
   }
   if (hooks.allowPrivate != null) allowPrivateForTests = hooks.allowPrivate;
-}
-
-export function isPrivateIp(ip: string): boolean {
-  const normalized = ip.replace(/^\[|\]$/g, "").toLowerCase();
-  if (net.isIP(normalized) === 0) return true;
-  if (
-    normalized === "0.0.0.0" ||
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized === "0:0:0:0:0:0:0:0" ||
-    normalized === "0:0:0:0:0:0:0:1"
-  ) {
-    return true;
-  }
-  if (normalized.startsWith("127.")) return true;
-  if (normalized.startsWith("10.")) return true;
-  if (normalized.startsWith("192.168.")) return true;
-  if (normalized.startsWith("169.254.")) return true;
-  if (
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    normalized.startsWith("fe80")
-  ) {
-    return true;
-  }
-  const v4Mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (v4Mapped?.[1]) return isPrivateIp(v4Mapped[1]);
-
-  const parts = normalized.split(".").map(Number);
-  if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
-    const [a, b] = parts as [number, number, number, number];
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-  }
-  return false;
 }
 
 export function hasPdfMagic(buffer: Buffer): boolean {

@@ -56,7 +56,12 @@ describe("QA fixture pack", () => {
     expect(portfolio?.required).toBe(false);
 
     for (const req of sources.body.requirements) {
-      await request(app).post(`/api/requirements/${req.id}/confirm`).expect(200);
+      const body =
+        req.certainty === "uncertain" ? { certainty: "required" } : {};
+      await request(app)
+        .post(`/api/requirements/${req.id}/confirm`)
+        .send(body)
+        .expect(200);
     }
 
     for (const file of [
