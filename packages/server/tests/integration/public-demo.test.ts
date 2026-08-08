@@ -275,11 +275,14 @@ describe("public demo mode security and concurrency", () => {
     config.rateLimit.windowMs = 60_000;
     const app = ctx.app();
 
-    await request(app).get("/api/health").expect(200);
-    await request(app).get("/api/health").expect(200);
-    await request(app).get("/api/health").expect(200);
-    const limited = await request(app).get("/api/health").expect(429);
+    // Health/config are exempt from the general limiter; exhaust via a normal API.
+    await request(app).get("/api/demo/steps").expect(200);
+    await request(app).get("/api/demo/steps").expect(200);
+    await request(app).get("/api/demo/steps").expect(200);
+    const limited = await request(app).get("/api/demo/steps").expect(429);
     expect(limited.body.error?.code).toBe("RATE_LIMITED");
+    await request(app).get("/api/health").expect(200);
+    await request(app).get("/api/config").expect(200);
 
     Object.assign(config.rateLimit, previous);
   });

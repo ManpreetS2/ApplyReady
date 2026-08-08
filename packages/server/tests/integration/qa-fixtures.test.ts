@@ -135,8 +135,11 @@ describe("QA fixture pack", () => {
         .expect(200);
     }
 
-    analysis = await request(app).post(`/api/applications/${id}/analyze`).expect(200);
-    expect(analysis.body.report.status).toBe("ready");
+    // Recompute readiness from the confirmed/dismissed state without regenerating issues.
+    const readiness = await request(app)
+      .get(`/api/applications/${id}/readiness`)
+      .expect(200);
+    expect(readiness.body.report.status).toBe("ready");
   });
 
   it("handles edge-case uploads safely", async () => {

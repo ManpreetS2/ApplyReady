@@ -167,6 +167,53 @@ test.describe("public demo portfolio mode", () => {
     await expect(page.getByRole("button", { name: "Reset demo" })).toBeVisible();
   });
 
+  test("transient restore failure keeps session id and offers retry", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await waitForDemoPageReady(page);
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    await expect(page.getByRole("button", { name: "Apply suggested fix" })).toBeVisible({
+      timeout: 60_000,
+    });
+
+    const savedId = await page.evaluate(() =>
+      sessionStorage.getItem("applyready.publicDemoApplicationId"),
+    );
+    expect(savedId).toBeTruthy();
+
+    let failedOnce = false;
+    await page.route(`**/api/applications/${savedId}`, async (route) => {
+      if (!failedOnce && route.request().method() === "GET") {
+        failedOnce = true;
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: { code: "INTERNAL", message: "Temporary failure" },
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Retry restore" })).toBeVisible({
+      timeout: 30_000,
+    });
+    const retained = await page.evaluate(() =>
+      sessionStorage.getItem("applyready.publicDemoApplicationId"),
+    );
+    expect(retained).toBe(savedId);
+
+    await page.getByRole("button", { name: "Retry restore" }).click();
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-state", "active", {
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("button", { name: "Reset demo" })).toBeVisible();
+  });
+
   test("unsupported routes redirect away from restricted areas", async ({ page }) => {
     await page.goto("/dashboard");
     await expect(page).toHaveURL(/\/demo/);
