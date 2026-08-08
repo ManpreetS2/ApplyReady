@@ -233,8 +233,53 @@ export class Repositories {
   }
 
   /**
-   * Re-point all child rows from one application to another, then delete the
-   * empty source application (and its profile via CASCADE).
+   * Copy every applicant profile field from one application onto another,
+   * preserving the target profile row id / application_id. Used by demo
+   * stage-and-swap so reset restores a pristine staged profile.
+   */
+  replaceApplicantProfileFrom(
+    fromApplicationId: string,
+    toApplicationId: string,
+  ): void {
+    if (fromApplicationId === toApplicationId) return;
+    const from = this.getProfile(fromApplicationId);
+    const to = this.getProfile(toApplicationId);
+    if (!from || !to) return;
+    this.db
+      .prepare(
+        `UPDATE applicant_profiles SET
+          full_legal_name=?, preferred_name=?, email=?, phone=?, school=?,
+          expected_graduation_date=?, major=?, gpa=?, address=?, target_organization=?,
+          currently_enrolled=?, user_confirmed=?, confirmed_fields=?, updated_at=?
+         WHERE application_id=?`,
+      )
+      .run(
+        from.fullLegalName,
+        from.preferredName,
+        from.email,
+        from.phone,
+        from.school,
+        from.expectedGraduationDate,
+        from.major,
+        from.gpa,
+        from.address,
+        from.targetOrganization,
+        from.currentlyEnrolled == null
+          ? null
+          : from.currentlyEnrolled
+            ? 1
+            : 0,
+        from.userConfirmed ? 1 : 0,
+        JSON.stringify(from.confirmedFields),
+        from.updatedAt,
+        toApplicationId,
+      );
+  }
+
+  /**
+   * Re-point all child rows from one application to another, replace the
+   * target profile with the source profile, then delete the empty source
+   * application (and its now-unneeded profile via CASCADE).
    */
   transferApplicationContents(
     fromApplicationId: string,
@@ -275,6 +320,7 @@ export class Repositories {
         "UPDATE activity_events SET application_id=? WHERE application_id=?",
       )
       .run(toApplicationId, fromApplicationId);
+    this.replaceApplicantProfileFrom(fromApplicationId, toApplicationId);
     // Drop the staging profile so CASCADE delete of the staging app is clean.
     this.db
       .prepare("DELETE FROM applicant_profiles WHERE application_id=?")

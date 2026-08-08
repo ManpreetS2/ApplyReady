@@ -21,10 +21,12 @@ import {
 import { withDemoLock } from "./lock.js";
 
 /** Test-only: force a failure during staged demo reset initialization. */
-let resetFailAfter: "ingest" | "seed" | null = null;
+let resetFailAfter: "ingest" | "seed" | "analyze" | "before_swap" | null = null;
 
 export function setDemoResetTestHooks(
-  hooks: { failAfter?: "ingest" | "seed" | null } | null,
+  hooks: {
+    failAfter?: "ingest" | "seed" | "analyze" | "before_swap" | null;
+  } | null,
 ): void {
   if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
     throw new Error("setDemoResetTestHooks is only available in tests");
@@ -116,7 +118,11 @@ async function initializeGuidedDemoContents(
   if (resetFailAfter === "seed") {
     throw new Error("Injected demo reset failure after seed");
   }
-  return analyzeApplication(db, applicationId);
+  const analysis = analyzeApplication(db, applicationId);
+  if (resetFailAfter === "analyze") {
+    throw new Error("Injected demo reset failure after analyze");
+  }
+  return analysis;
 }
 
 async function destroyDemoApplication(
@@ -476,8 +482,8 @@ export async function resetGuidedDemo(db: Database.Database, applicationId: stri
     }
 
     // Stage a complete replacement under a temporary application. The live
-    // demo is untouched until staging succeeds and a DB transaction swaps
-    // ownership. Old files are deleted only after that commit.
+    // demo is untouched until staging (including analysis) succeeds and a DB
+    // transaction swaps ownership. Old files are deleted only after that commit.
     const previousDocs = repos.listDocuments(applicationId);
     const previousReqCount = repos.listRequirements(applicationId).length;
     const previousDemoStep = app.demoStep;
@@ -493,9 +499,16 @@ export async function resetGuidedDemo(db: Database.Database, applicationId: stri
     });
 
     let stagingDocs: ReturnType<Repositories["listDocuments"]> = [];
+    let stagedAnalysis: ReturnType<typeof analyzeApplication> | null = null;
     try {
-      await initializeGuidedDemoContents(db, staging.id);
+      stagedAnalysis = await initializeGuidedDemoContents(db, staging.id);
       stagingDocs = repos.listDocuments(staging.id);
+      const stagedApp = repos.getApplication(staging.id)!;
+
+      // Latest safe pre-commit failure point — live demo still intact.
+      if (resetFailAfter === "before_swap") {
+        throw new Error("Injected demo reset failure before swap");
+      }
 
       withTransaction(db, () => {
         repos.clearApplicationContents(applicationId);
@@ -506,22 +519,12 @@ export async function resetGuidedDemo(db: Database.Database, applicationId: stri
           notes: "Guided demo application packet",
           name: "Future Engineers Scholarship",
           organization: "Future Engineers Scholarship",
+          readinessScore: stagedApp.readinessScore,
+          readinessStatus: stagedApp.readinessStatus,
+          lastAnalyzedAt: stagedApp.lastAnalyzedAt,
         });
         repos.addActivity(applicationId, "demo_reset", "Guided demo reset in place");
       });
-
-      // DB swap committed — retire previous files only now.
-      for (const doc of previousDocs) {
-        deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
-      }
-
-      const analysis = analyzeApplication(db, applicationId);
-
-      return {
-        application: repos.getApplication(applicationId),
-        step: DEMO_STEPS[0],
-        analysis,
-      };
     } catch (error) {
       // Staging failed or swap rolled back — live demo must remain intact.
       try {
@@ -560,6 +563,37 @@ export async function resetGuidedDemo(db: Database.Database, applicationId: stri
       }
       throw error;
     }
+
+    // Swap committed — reset is logically successful. Remaining work is
+    // best-effort and must not throw back to the caller.
+    for (const doc of previousDocs) {
+      try {
+        deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
+      } catch (cleanupError) {
+        const message =
+          cleanupError instanceof Error ? cleanupError.message : "unknown error";
+        console.error(`[applyready] demo reset old-file cleanup failed: ${message}`);
+      }
+    }
+
+    // Assemble response from already-committed staged analysis + transferred rows.
+    // Do not re-run analyzeApplication here — that would be failure-prone after swap.
+    const analysis = {
+      report: {
+        ...stagedAnalysis!.report,
+        applicationId,
+      },
+      issues: repos.listIssues(applicationId),
+      matches: repos.listMatches(applicationId),
+      conflicts: repos.listConflicts(applicationId),
+      validations: repos.listValidations(applicationId),
+    };
+
+    return {
+      application: repos.getApplication(applicationId),
+      step: DEMO_STEPS[0],
+      analysis,
+    };
   });
 }
 
