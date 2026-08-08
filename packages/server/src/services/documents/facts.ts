@@ -118,6 +118,31 @@ export class RegexDocumentFactExtractor implements DocumentFactExtractor {
       });
     }
 
+    // Explicit enrollment evidence only — never infer from school/graduation alone.
+    const negativeEnrollment = text.match(
+      /\b(?:not\s+currently\s+enrolled|no\s+longer\s+enrolled|is\s+not\s+enrolled)\b/i,
+    );
+    if (negativeEnrollment) {
+      facts.push({
+        factType: "enrollment",
+        value: "currently_enrolled=false",
+        evidence: negativeEnrollment[0]!,
+        confidence: 0.9,
+      });
+    } else {
+      const positiveEnrollment = text.match(
+        /\b(?:currently\s+enrolled|enrollment\s+verification|enrolled\s+full[- ]time|enrolled\s+at\b|student\s+is\s+currently\s+enrolled)\b/i,
+      );
+      if (positiveEnrollment) {
+        facts.push({
+          factType: "enrollment",
+          value: "currently_enrolled=true",
+          evidence: positiveEnrollment[0]!,
+          confidence: 0.85,
+        });
+      }
+    }
+
     return facts;
   }
 }

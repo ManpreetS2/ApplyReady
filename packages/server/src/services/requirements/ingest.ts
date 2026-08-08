@@ -32,13 +32,6 @@ export async function ingestPastedText(
     sourceName,
   });
 
-  // Enrich organization expectation on document requirements
-  for (const draft of drafts) {
-    if (!draft.organizationNameExpected) {
-      draft.organizationNameExpected = app.organization;
-    }
-  }
-
   const requirements = repos.insertRequirementsFromDrafts(
     applicationId,
     source,
@@ -103,10 +96,7 @@ export async function ingestUrl(
     sourceType,
     sourceName: fetched.url,
     sourceUrl: fetched.url,
-  }).map((d) => ({
-    ...d,
-    organizationNameExpected: d.organizationNameExpected || app.organization,
-  }));
+  });
 
   const requirements = repos.insertRequirementsFromDrafts(
     applicationId,
@@ -177,10 +167,7 @@ export async function ingestUploadedSource(
     organization: app.organization,
     sourceType,
     sourceName: originalFilename,
-  }).map((d) => ({
-    ...d,
-    organizationNameExpected: d.organizationNameExpected || app.organization,
-  }));
+  });
 
   const requirements = repos.insertRequirementsFromDrafts(
     applicationId,

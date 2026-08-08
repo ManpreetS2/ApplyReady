@@ -39,11 +39,7 @@ export class RuleDocumentValidator implements DocumentValidator {
     const findings: ValidationFinding[] = [];
     const ext = getExtension(filename);
     const lowerText = documentText.toLowerCase();
-    const expectedOrg = (
-      requirement.organizationNameExpected ||
-      organization ||
-      ""
-    ).toLowerCase();
+    const expectedOrg = (requirement.organizationNameExpected || "").toLowerCase();
 
     if (requirement.acceptedFileExtensions.length > 0) {
       const ok = requirement.acceptedFileExtensions.includes(ext);
@@ -110,13 +106,28 @@ export class RuleDocumentValidator implements DocumentValidator {
 
     if (requirement.pageLimitMaximum != null && pageCount != null) {
       const ok = pageCount <= requirement.pageLimitMaximum;
+      const mandatory = requirement.required && requirement.certainty === "required";
       findings.push({
         rule: "page_limit_max",
         passed: ok,
-        severity: ok ? "suggestion" : "warning",
+        severity: ok ? "suggestion" : mandatory ? "blocking" : "warning",
         message: ok
-          ? `Page count ${pageCount} is within the limit.`
+          ? `Page count ${pageCount} is within the maximum of ${requirement.pageLimitMaximum}.`
           : `Document has ${pageCount} pages, exceeding the maximum of ${requirement.pageLimitMaximum}.`,
+        evidence: `Page count: ${pageCount}`,
+      } as const);
+    }
+
+    if (requirement.pageLimitMinimum != null && pageCount != null) {
+      const ok = pageCount >= requirement.pageLimitMinimum;
+      const mandatory = requirement.required && requirement.certainty === "required";
+      findings.push({
+        rule: "page_limit_min",
+        passed: ok,
+        severity: ok ? "suggestion" : mandatory ? "blocking" : "warning",
+        message: ok
+          ? `Page count ${pageCount} meets the minimum of ${requirement.pageLimitMinimum}.`
+          : `Document has ${pageCount} pages, below the minimum of ${requirement.pageLimitMinimum}.`,
         evidence: `Page count: ${pageCount}`,
       } as const);
     }
@@ -159,6 +170,32 @@ export class RuleDocumentValidator implements DocumentValidator {
             "ApplyReady could not confirm the recommendation is addressed to the target organization.",
           evidence: expectedOrg,
         } as const);
+      }
+    } else if (
+      !expectedOrg &&
+      ["essay", "recommendation"].includes(requirement.category)
+    ) {
+      // No invented org requirement — only warn if an obvious other org appears
+      // and the application organization is known.
+      const appOrg = (organization || "").toLowerCase();
+      const mentionsOther = OTHER_ORG_HINTS.some((hint) => lowerText.includes(hint));
+      if (mentionsOther && appOrg) {
+        const mentionsApp =
+          lowerText.includes(appOrg) ||
+          appOrg
+            .split(/\s+/)
+            .filter((t) => t.length > 3)
+            .every((token) => lowerText.includes(token));
+        if (!mentionsApp) {
+          findings.push({
+            rule: "organization_reference",
+            passed: false,
+            severity: "needs_confirmation",
+            message:
+              "Document appears to reference a different organization than this application. The posting did not explicitly require addressing a specific organization.",
+            evidence: excerptOrg(documentText),
+          } as const);
+        }
       }
     }
 

@@ -1,12 +1,16 @@
 /**
  * Conservative deadline assessment.
- * Does not invent a timezone for date-only values.
+ * Does not invent a timezone for date-only values or ambiguous clock times.
  *
  * Exact timestamps with an explicit offset/Z are compared as instants.
  * Date-only values use a worldwide timezone envelope (UTC−12 … UTC+14):
  * - past only when the calendar date has ended in every inhabited offset
  * - future only when the calendar date has not begun in any offset
  * - otherwise today / needs-confirmation (never prematurely expired)
+ *
+ * Natural-language deadlines with a clock time but without a safely
+ * interpretable numeric offset remain ambiguous (named TZ abbreviations
+ * are preserved in the original string but not silently converted).
  */
 
 export type DeadlineAssessment =
@@ -93,6 +97,23 @@ function dateOnlyLatestEndUtc(dateOnly: string): Date {
   return end;
 }
 
+function hasClockTime(original: string): boolean {
+  return (
+    /\b\d{1,2}:\d{2}(?::\d{2})?\b/.test(original) ||
+    /\bat\s+\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b/i.test(original)
+  );
+}
+
+function hasNamedTimezoneAbbrev(original: string): boolean {
+  return /\b(?:UTC|GMT|PT|PST|PDT|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|AKST|AKDT|HST|BST|CET|CEST)\b/i.test(
+    original,
+  );
+}
+
+function hasNumericOffsetOrZ(original: string): boolean {
+  return /(?:Z|[+-]\d{2}:?\d{2})\s*$/i.test(original.trim());
+}
+
 export function assessDeadline(
   raw: string,
   now = new Date(),
@@ -131,6 +152,15 @@ export function assessDeadline(
       dateOnly: false,
       comparable: instant.toISOString(),
     };
+  }
+
+  // Clock time present without a safely interpretable numeric offset/Z:
+  // preserve the full original string and mark ambiguous (do not strip to date-only).
+  if (hasClockTime(original) && !hasNumericOffsetOrZ(original)) {
+    const reason = hasNamedTimezoneAbbrev(original)
+      ? "Deadline includes a clock time with a named timezone abbreviation that is not safely converted to an exact instant"
+      : "Deadline includes a clock time without an explicit numeric timezone offset";
+    return { status: "ambiguous", original, reason };
   }
 
   // ISO date-only
