@@ -25,25 +25,46 @@ Real uploads, arbitrary URL fetching, vault access, application listing, and glo
 
 Knowing a demo UUID is enough to open that fictional temporary session. Treat the public demo as a shared recruiter walkthrough, not private document storage.
 
-## Required environment variables
+## Railway deployment
+
+Use the repository root `Dockerfile`. Do **not** set a custom start command. Run **one replica**. No persistent volume is required for the portfolio demo (ephemeral `/tmp` storage is expected).
+
+### Do not set on Railway
+
+- `PORT` — leave unset; Railway injects `PORT`, and the app already listens on `process.env.PORT`
+- `APPLYREADY_DISABLE_RATE_LIMIT` — local/E2E bypass only
+- `APPLYREADY_E2E` — local/E2E only
+
+### Required / recommended variables
 
 ```env
-HOST=0.0.0.0
-PORT=8787
 PUBLIC_DEMO_MODE=true
 NODE_ENV=production
+HOST=0.0.0.0
 APPLYREADY_DATA_DIR=/tmp/applyready-data
 APPLYREADY_UPLOADS_DIR=/tmp/applyready-uploads
 APPLYREADY_DB_PATH=/tmp/applyready-data/applyready.sqlite
 PUBLIC_DEMO_TTL_HOURS=6
 PUBLIC_DEMO_MAX_ACTIVE_DEMOS=25
+TRUST_PROXY=true
 ```
 
-Optional:
+Healthcheck path: `/api/health`
+
+Once Railway assigns a public domain, set an explicit allowlist even though proxy-aware same-origin CORS should work:
 
 ```env
-CORS_ORIGINS=https://your-demo-host.example
-TRUST_PROXY=true
+CORS_ORIGINS=https://<generated-domain>
+```
+
+With `TRUST_PROXY=true`, ApplyReady:
+
+- prefers Railway `X-Real-IP` for per-client rate-limit keys (validated before use)
+- uses `X-Forwarded-Host` / `X-Forwarded-Proto` for same-origin CORS checks
+
+### Optional rate-limit tuning
+
+```env
 PUBLIC_DEMO_CLEANUP_INTERVAL_MS=900000
 RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX=100
@@ -53,11 +74,11 @@ DEMO_MUTATION_RATE_LIMIT_WINDOW_MS=900000
 DEMO_MUTATION_RATE_LIMIT_MAX=120
 ```
 
-Do **not** set `APPLYREADY_DISABLE_RATE_LIMIT` in hosted environments (that flag is for automated local/E2E testing only).
-
 `PUBLIC_DEMO_MAX_ACTIVE_DEMOS` (default 25) is a global ceiling on active (non-expired) demos after stale cleanup. When capacity is reached, new demo starts return `DEMO_CAPACITY_REACHED` (503). Active demos are never deleted just to make room.
 
-## Docker
+## Local Docker
+
+Port **8787** remains the local/default container example. The image may declare `ENV PORT=8787` / `EXPOSE 8787`; Railway runtime env vars override image `ENV` values.
 
 Build:
 
@@ -73,6 +94,7 @@ docker run --rm \
   -e NODE_ENV=production \
   -e HOST=0.0.0.0 \
   -e PORT=8787 \
+  -e TRUST_PROXY=true \
   -p 8787:8787 \
   applyready-public-demo
 ```

@@ -5,46 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import { config } from "./config.js";
+import { rateLimitClientKey } from "./http/clientKey.js";
+import { isAllowedOrigin } from "./http/corsOrigin.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { createApiRouter } from "./routes/api.js";
-
-function isLoopbackHostname(hostname: string): boolean {
-  return (
-    hostname === "127.0.0.1" ||
-    hostname === "localhost" ||
-    hostname === "::1" ||
-    hostname === "[::1]"
-  );
-}
-
-function isAllowedOrigin(origin: string, req: express.Request): boolean {
-  if (config.allowedOrigins.includes(origin)) return true;
-
-  let parsed: URL;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return false;
-  }
-
-  // Vite module scripts use crossorigin and send Origin even for same-origin loads.
-  const requestHost = req.headers.host;
-  if (requestHost && parsed.host === requestHost) {
-    return true;
-  }
-
-  if (isLoopbackHostname(parsed.hostname)) {
-    const originPort =
-      parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-    if (originPort === String(config.port)) return true;
-    if (requestHost?.includes(":")) {
-      const hostPort = requestHost.split(":").pop();
-      if (hostPort && originPort === hostPort) return true;
-    }
-  }
-
-  return false;
-}
 
 function shouldSkipRateLimit(): boolean {
   if (config.isTest && process.env.APPLYREADY_ENABLE_RATE_LIMIT !== "true") {
@@ -136,11 +100,14 @@ export function createApp(db: Database.Database) {
 
   app.use(express.json({ limit: "2mb" }));
 
+  const sharedKeyGenerator = (req: express.Request) => rateLimitClientKey(req);
+
   const generalLimiter = rateLimit({
     windowMs: config.rateLimit.windowMs,
     max: config.rateLimit.max,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: sharedKeyGenerator,
     handler: rateLimitHandler,
     skip: (req) =>
       shouldSkipRateLimit() ||
@@ -153,6 +120,7 @@ export function createApp(db: Database.Database) {
     max: config.rateLimit.demoStartMax,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: sharedKeyGenerator,
     handler: rateLimitHandler,
     skip: () => shouldSkipRateLimit(),
   });
@@ -162,6 +130,7 @@ export function createApp(db: Database.Database) {
     max: config.rateLimit.demoMutationMax,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: sharedKeyGenerator,
     handler: rateLimitHandler,
     skip: () => shouldSkipRateLimit(),
   });
