@@ -30,7 +30,7 @@ const DOC_PATTERNS: Array<{
   },
   {
     category: "recommendation",
-    terms: /\b(recommendation(?:\s+letter)?|letter of recommendation|reference letter|references?)\b/i,
+    terms: /\b(recommendation(?:\s+letter)?|letter of recommendation|reference letter|references?|(?:the\s+)?letter\s+must\s+be\s+addressed)\b/i,
     title: "Recommendation Letter",
   },
   {
@@ -192,7 +192,7 @@ function extractFilenamePattern(sentence: string): string | null {
   return pattern?.[1] ?? null;
 }
 
-function extractRecCount(sentence: string): number | null {
+function extractRecCountNumber(sentence: string): number | null {
   const words: Record<string, number> = {
     one: 1,
     two: 2,
@@ -208,6 +208,37 @@ function extractRecCount(sentence: string): number | null {
   return words[raw] ?? Number(raw);
 }
 
+/**
+ * Recommendation cardinality semantics:
+ * - "submit/provide N" / "at least N" → min=N, max=null
+ * - "exactly N" → min=N, max=N
+ * - "no more than / at most / maximum N" → min stays default (1), max=N
+ */
+function extractRecCountSemantics(sentence: string): {
+  minimumCount: number;
+  maximumCount: number | null;
+} | null {
+  const n = extractRecCountNumber(sentence);
+  if (n == null || !Number.isFinite(n) || n < 1) return null;
+
+  if (
+    /\b(?:exactly|precisely)\s+(?:one|two|three|four|five|\d+)\b/i.test(
+      sentence,
+    )
+  ) {
+    return { minimumCount: n, maximumCount: n };
+  }
+  if (
+    /\b(?:no more than|at most|up to|maximum(?:\s+of)?)\s+(?:one|two|three|four|five|\d+)\b/i.test(
+      sentence,
+    )
+  ) {
+    return { minimumCount: 1, maximumCount: n };
+  }
+  // "at least N", "submit N", "N recommendation letters are required", etc.
+  return { minimumCount: n, maximumCount: null };
+}
+
 function extractDeadline(text: string): string | null {
   // Prefer full cutoff phrases (date + time + optional TZ) over date-only.
   const withTime = text.match(
@@ -217,24 +248,40 @@ function extractDeadline(text: string): string | null {
 }
 
 function detectOrganizationExpected(sentence: string): string | null {
-  // Require an explicit addressing/reference verb — never generic "for the".
-  const explicitVerb =
-    /\b(?:address(?:ed)?\s+(?:the\s+)?(?:letter|essay|recommendation|statement)?\s*to|must\s+be\s+addressed\s+to|address(?:ed)?\s+to|must\s+reference|should\s+reference|must\s+name|should\s+name|name\s+[A-Z]|reference\s+[A-Z]|discuss[\s\S]{0,40}(?:Scholarship|Foundation))\b/i.test(
-      sentence,
-    );
-  if (!explicitVerb) return null;
-
-  // Only set when a concrete organization name appears in the same evidence.
-  const named = sentence.match(
-    /\b([A-Z][A-Za-z0-9 &'-]{2,60}(?:Scholarship|Foundation|Program|Fellowship))\b/,
+  // Locate an explicit address / reference / name verb (case-insensitive),
+  // then capture the concrete org name that follows — never leading instruction text.
+  const verb = sentence.match(
+    /\b(?:(?:must|should)\s+be\s+addressed\s+to|address(?:ed)?\s+(?:(?:the\s+)?(?:letter|essay|recommendation|statement)\s+)?to|(?:must|should)\s+reference|(?:must|should)\s+name|\bname|\breference)\b/i,
   );
-  if (!named?.[1]) return null;
-  return named[1].trim();
+  if (!verb || verb.index == null) return null;
+  const after = sentence.slice(verb.index + verb[0].length);
+  const named = after.match(
+    /^\s*(?:the\s+)?([A-Z][A-Za-z0-9 &'-]{1,60}(?:Scholarship|Foundation|Program|Fellowship))\b/,
+  );
+  const name = named?.[1]?.trim();
+  if (!name) return null;
+  if (/^(the\s+)?organization\b/i.test(name)) return null;
+  return name;
 }
 
 function detectSignatureRequired(sentence: string): boolean {
   return /\b(signature|signed (?:letter|recommendation)|hand[- ]?signed|must be signed)\b/i.test(
     sentence,
+  );
+}
+
+/** Explicit conditional clauses only — bare "when"/"if" in narrative is not enough. */
+function detectConditional(sentence: string): boolean {
+  return (
+    /\bif applicable\b/i.test(sentence) ||
+    /\bwhere applicable\b/i.test(sentence) ||
+    /\bonly if\b/i.test(sentence) ||
+    /\bif you\b/i.test(sentence) ||
+    /\bif the applicant\b/i.test(sentence) ||
+    /\bif currently\b/i.test(sentence) ||
+    /\bfor applicants who\b/i.test(sentence) ||
+    /\bwhen required\b/i.test(sentence) ||
+    /\bif\s+(?:you\s+are|you\s+have|you\s+were|currently)\b/i.test(sentence)
   );
 }
 
@@ -293,7 +340,11 @@ export class RuleRequirementExtractor implements RequirementExtractor {
         if (!pattern.terms.test(sentence)) continue;
         if (!looksLikeRequirement && pattern.category !== "combined_packet") {
           // Still capture clear document requirement lines.
-          if (!/\b(resume|transcript|essay|recommendation|portfolio|packet)\b/i.test(sentence)) {
+          if (
+            !/\b(resume|transcript|essay|recommendation|portfolio|packet|letter)\b/i.test(
+              sentence,
+            )
+          ) {
             continue;
           }
         }
@@ -303,7 +354,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
         const pages = extractPageLimits(sentence);
         const extensions = extractExtensions(sentence);
         const filenamePattern = extractFilenamePattern(sentence);
-        const recCount = extractRecCount(sentence);
+        const recCounts = extractRecCountSemantics(sentence);
         const signatureRequired = detectSignatureRequired(sentence);
         // Explicit filename instructions are actionable rules, not ambiguous mentions.
         const certainty =
@@ -323,9 +374,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
         if (filenamePattern) confidence += 0.1;
         if (certainty === "uncertain") confidence -= 0.15;
 
-        const conditional = /\bif\b|\bwhen\b|\bfor applicants who\b|\bif applicable\b/i.test(
-          sentence,
-        );
+        const conditional = detectConditional(sentence);
         drafts.push(
           emptyDraft({
             title: pattern.title,
@@ -342,12 +391,12 @@ export class RuleRequirementExtractor implements RequirementExtractor {
             acceptedDocumentTypes: [pattern.category],
             acceptedFileExtensions: extensions,
             minimumCount:
-              pattern.category === "recommendation" && recCount
-                ? recCount
+              pattern.category === "recommendation" && recCounts
+                ? recCounts.minimumCount
                 : 1,
             maximumCount:
-              pattern.category === "recommendation" && recCount
-                ? recCount
+              pattern.category === "recommendation" && recCounts
+                ? recCounts.maximumCount
                 : null,
             wordLimitMinimum: words.min,
             wordLimitMaximum: words.max,

@@ -103,13 +103,14 @@ describe("requirement extraction fidelity", () => {
     expect(essays.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("detects recommendation counts", () => {
+  it("detects recommendation counts without inventing a maximum", () => {
     const drafts = runRequirementPipeline(
       "Applicants must submit two letters of recommendation.",
       { sourceType: "pasted_text", sourceName: "t" },
     );
     const rec = drafts.find((d) => d.category === "recommendation");
     expect(rec?.minimumCount).toBe(2);
+    expect(rec?.maximumCount).toBeNull();
   });
 
   it("does not invent unsupported categories without evidence", () => {

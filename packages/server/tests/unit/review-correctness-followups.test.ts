@@ -8,6 +8,7 @@ import { isSatisfyingMatch } from "../../src/services/matching/satisfying.js";
 import { RuleRequirementExtractor } from "../../src/services/requirements/extractor.js";
 import { isGlobalUnicastIp, isPrivateIp } from "../../src/services/net/privateIp.js";
 import {
+  advanceGuidedDemo,
   resetGuidedDemo,
   setDemoResetTestHooks,
   startGuidedDemo,
@@ -60,6 +61,74 @@ describe("review fixes — demo reset failure safety", () => {
     expect(reset.application!.demoStep).toBe(0);
     expect(repos.listDocuments(id).length).toBeGreaterThan(0);
   });
+
+  it("preserves the live demo when failure is injected immediately before swap", async () => {
+    const db = ctx.db();
+    const repos = new Repositories(db);
+    const started = await startGuidedDemo(db);
+    const id = started.application!.id;
+    const beforeDocs = repos.listDocuments(id).map((d) => d.id).sort();
+    const beforeReqs = repos.listRequirements(id).map((r) => r.id).sort();
+    const beforeProfile = repos.getProfile(id)!;
+
+    setDemoResetTestHooks({ failAfter: "before_swap" });
+    await expect(resetGuidedDemo(db, id)).rejects.toThrow(
+      /Injected demo reset failure before swap/,
+    );
+
+    expect(repos.listDocuments(id).map((d) => d.id).sort()).toEqual(beforeDocs);
+    expect(repos.listRequirements(id).map((r) => r.id).sort()).toEqual(beforeReqs);
+    expect(repos.getProfile(id)).toEqual(beforeProfile);
+    expect(repos.listApplications().filter((a) => a.id !== id)).toHaveLength(0);
+  });
+
+  it("resets applicant profile to a fresh guided-demo profile", async () => {
+    const db = ctx.db();
+    const repos = new Repositories(db);
+    const fresh = await startGuidedDemo(db);
+    const freshId = fresh.application!.id;
+    const freshProfile = repos.getProfile(freshId)!;
+
+    const started = await startGuidedDemo(db);
+    const id = started.application!.id;
+    await advanceGuidedDemo(db, id);
+    repos.updateProfile(id, {
+      fullLegalName: "Stale Name",
+      email: "stale@example.com",
+      phone: "555-0000",
+      school: "Stale U",
+      gpa: "2.0",
+      expectedGraduationDate: "May 2099",
+      currentlyEnrolled: false,
+      major: "History",
+      userConfirmed: true,
+      confirmedFields: [
+        "fullLegalName",
+        "email",
+        "phone",
+        "school",
+        "gpa",
+        "expectedGraduationDate",
+        "currentlyEnrolled",
+        "major",
+      ],
+    });
+
+    const reset = await resetGuidedDemo(db, id);
+    expect(reset.application!.id).toBe(id);
+    const after = repos.getProfile(id)!;
+    expect(after.fullLegalName).toBe(freshProfile.fullLegalName);
+    expect(after.email).toBe(freshProfile.email);
+    expect(after.phone).toBe(freshProfile.phone);
+    expect(after.school).toBe(freshProfile.school);
+    expect(after.gpa).toBe(freshProfile.gpa);
+    expect(after.expectedGraduationDate).toBe(freshProfile.expectedGraduationDate);
+    expect(after.currentlyEnrolled).toBe(freshProfile.currentlyEnrolled);
+    expect(after.major).toBe(freshProfile.major);
+    expect(after.confirmedFields).toEqual(freshProfile.confirmedFields);
+    expect(after.userConfirmed).toBe(freshProfile.userConfirmed);
+    expect(after.targetOrganization).toBe(freshProfile.targetOrganization);
+  });
 });
 
 describe("review fixes — organization extraction fidelity", () => {
@@ -84,34 +153,253 @@ describe("review fixes — organization extraction fidelity", () => {
     }
   });
 
-  it("sets organizationNameExpected only with explicit verb + concrete name", () => {
-    const addressed = extractor.extract(
-      "The recommendation letter must be addressed to Future Engineers Scholarship.",
-      ctxOrg,
-    );
+  it("extracts the exact organization name after the verb", () => {
     expect(
-      addressed.some((d) =>
-        d.organizationNameExpected?.includes("Future Engineers Scholarship"),
-      ),
-    ).toBe(true);
+      extractor.extract(
+        "The essay must reference Future Engineers Scholarship.",
+        ctxOrg,
+      ).find((d) => d.category === "essay")?.organizationNameExpected,
+    ).toBe("Future Engineers Scholarship");
 
-    const referenced = extractor.extract(
-      "The essay must reference Future Engineers Scholarship.",
-      ctxOrg,
-    );
     expect(
-      referenced.some((d) =>
-        d.organizationNameExpected?.includes("Future Engineers Scholarship"),
-      ),
-    ).toBe(true);
+      extractor.extract(
+        "Address the recommendation to Future Engineers Scholarship.",
+        ctxOrg,
+      ).find((d) => d.category === "recommendation")?.organizationNameExpected,
+    ).toBe("Future Engineers Scholarship");
 
-    const vagueAddress = extractor.extract(
-      "Address the letter to the organization listed above.",
-      ctxOrg,
+    expect(
+      extractor.extract(
+        "The letter must be addressed to Bright Tomorrow Foundation.",
+        ctxOrg,
+      ).find((d) => d.category === "recommendation")?.organizationNameExpected,
+    ).toBe("Bright Tomorrow Foundation");
+
+    expect(
+      extractor.extract(
+        "Address the letter to the organization.",
+        ctxOrg,
+      ).every((d) => d.organizationNameExpected == null),
+    ).toBe(true);
+  });
+});
+
+describe("review fixes — recommendation count semantics", () => {
+  const extractor = new RuleRequirementExtractor();
+  const ctxRec = {
+    applicationName: "App",
+    organization: "Org",
+    sourceType: "pasted_text",
+    sourceName: "t",
+  } as const;
+
+  function rec(sentence: string) {
+    return extractor
+      .extract(sentence, ctxRec)
+      .find((d) => d.category === "recommendation");
+  }
+
+  it("distinguishes minimum-only, exact, and maximum-only language", () => {
+    expect(rec("Submit two recommendation letters.")).toMatchObject({
+      minimumCount: 2,
+      maximumCount: null,
+    });
+    expect(rec("At least two recommendation letters.")).toMatchObject({
+      minimumCount: 2,
+      maximumCount: null,
+    });
+    expect(rec("Exactly two recommendation letters.")).toMatchObject({
+      minimumCount: 2,
+      maximumCount: 2,
+    });
+    expect(rec("No more than two recommendation letters.")).toMatchObject({
+      minimumCount: 1,
+      maximumCount: 2,
+    });
+    expect(rec("One recommendation letter is required.")).toMatchObject({
+      minimumCount: 1,
+      maximumCount: null,
+    });
+  });
+
+  it("readiness respects extracted min/max without inventing a max", async () => {
+    const db = ctx.db();
+    const repos = new Repositories(db);
+
+    const minOnly = repos.createApplication({
+      name: "MinOnly",
+      organization: "Org",
+      type: "scholarship",
+    });
+    const { ingestPastedText } = await import(
+      "../../src/services/requirements/ingest.js"
     );
-    expect(vagueAddress.every((d) => d.organizationNameExpected == null)).toBe(
+    await ingestPastedText(
+      db,
+      minOnly.id,
+      "Submit two recommendation letters.",
+      "rules",
+    );
+    const minReq = repos
+      .listRequirements(minOnly.id)
+      .find((r) => r.category === "recommendation")!;
+    expect(minReq.maximumCount).toBeNull();
+    repos.updateRequirement(minReq.id, {
+      userConfirmed: true,
+      certainty: "required",
+      required: true,
+    });
+    for (const name of ["Recommendation_A.pdf", "Recommendation_B.pdf"]) {
+      const id = newId();
+      repos.createDocument({
+        id,
+        applicationId: minOnly.id,
+        vaultDocumentId: null,
+        originalFilename: name,
+        storedFilename: name,
+        mimeType: "application/pdf",
+        fileSize: 10,
+        pageCount: 1,
+        wordCount: 40,
+        title: "Letter of Recommendation",
+        category: "recommendation",
+        categoryConfidence: 0.95,
+        parseStatus: "parsed",
+        parsingWarnings: [],
+        contentHash: id,
+        text: "Letter of Recommendation Dear Committee I recommend Alex.",
+      });
+      repos.upsertMatch({
+        id: newId(),
+        applicationId: minOnly.id,
+        requirementId: minReq.id,
+        documentId: id,
+        status: "confirmed",
+        confidence: 1,
+        explanation: "user",
+        evidence: [],
+        userConfirmed: true,
+      });
+    }
+    const minResult = analyzeApplication(db, minOnly.id);
+    expect(minResult.issues.some((i) => i.code === "TOO_MANY_DOCUMENTS")).toBe(
+      false,
+    );
+
+    const exact = repos.createApplication({
+      name: "Exact",
+      organization: "Org",
+      type: "scholarship",
+    });
+    await ingestPastedText(
+      db,
+      exact.id,
+      "Exactly two recommendation letters are required.",
+      "rules",
+    );
+    const exactReq = repos
+      .listRequirements(exact.id)
+      .find((r) => r.category === "recommendation")!;
+    expect(exactReq).toMatchObject({ minimumCount: 2, maximumCount: 2 });
+    repos.updateRequirement(exactReq.id, {
+      userConfirmed: true,
+      certainty: "required",
+      required: true,
+    });
+    for (const name of [
+      "Recommendation_1.pdf",
+      "Recommendation_2.pdf",
+      "Recommendation_3.pdf",
+    ]) {
+      const id = newId();
+      repos.createDocument({
+        id,
+        applicationId: exact.id,
+        vaultDocumentId: null,
+        originalFilename: name,
+        storedFilename: name,
+        mimeType: "application/pdf",
+        fileSize: 10,
+        pageCount: 1,
+        wordCount: 40,
+        title: "Letter of Recommendation",
+        category: "recommendation",
+        categoryConfidence: 0.95,
+        parseStatus: "parsed",
+        parsingWarnings: [],
+        contentHash: id,
+        text: "Letter of Recommendation Dear Committee I recommend Alex.",
+      });
+      repos.upsertMatch({
+        id: newId(),
+        applicationId: exact.id,
+        requirementId: exactReq.id,
+        documentId: id,
+        status: "confirmed",
+        confidence: 1,
+        explanation: "user",
+        evidence: [],
+        userConfirmed: true,
+      });
+    }
+    const exactResult = analyzeApplication(db, exact.id);
+    expect(exactResult.issues.some((i) => i.code === "TOO_MANY_DOCUMENTS")).toBe(
       true,
     );
+  });
+});
+
+describe("review fixes — conditional applicability detection", () => {
+  const extractor = new RuleRequirementExtractor();
+  const ctxCond = {
+    applicationName: "App",
+    organization: "Org",
+    sourceType: "pasted_text",
+    sourceName: "t",
+  } as const;
+
+  it("treats explicit conditional clauses as conditional", () => {
+    expect(
+      extractor.extract("If applicable, submit a portfolio.", ctxCond).some(
+        (d) => d.category === "portfolio" && d.conditional,
+      ),
+    ).toBe(true);
+    expect(
+      extractor
+        .extract(
+          "If you are currently employed, provide a supervisor reference letter.",
+          ctxCond,
+        )
+        .some((d) => d.category === "recommendation" && d.conditional),
+    ).toBe(true);
+    expect(
+      extractor
+        .extract(
+          "For applicants who attended another institution, submit that transcript.",
+          ctxCond,
+        )
+        .some((d) => d.category === "transcript" && d.conditional),
+    ).toBe(true);
+    expect(
+      extractor
+        .extract(
+          "When required by the department, provide certification.",
+          ctxCond,
+        )
+        .some((d) => d.category === "certification" && d.conditional),
+    ).toBe(true);
+  });
+
+  it("does not treat narrative when-clauses as conditional", () => {
+    const drafts = extractor.extract(
+      "Submit an essay describing when you demonstrated leadership.",
+      ctxCond,
+    );
+    expect(
+      drafts
+        .filter((d) => d.category === "essay")
+        .every((d) => d.conditional === false),
+    ).toBe(true);
   });
 });
 

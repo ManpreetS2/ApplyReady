@@ -359,6 +359,7 @@ describe("correctness v2 — counts and allocation", () => {
       .listRequirements(app.id)
       .find((r) => r.category === "recommendation");
     expect(rec?.minimumCount).toBe(2);
+    expect(rec?.maximumCount).toBeNull();
     repos.updateRequirement(rec!.id, {
       userConfirmed: true,
       certainty: "required",
@@ -1086,8 +1087,10 @@ describe("correctness v2 — deadlines and pages and org", () => {
     const addressed = repos
       .listRequirements(app.id)
       .filter((r) => r.category === "recommendation")
-      .some((r) => r.organizationNameExpected?.includes("Future Engineers"));
-    expect(addressed).toBe(true);
+      .find((r) => r.organizationNameExpected != null);
+    expect(addressed?.organizationNameExpected).toBe(
+      "Future Engineers Scholarship",
+    );
   });
 });
 
