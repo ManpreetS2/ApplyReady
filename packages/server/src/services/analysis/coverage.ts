@@ -1,9 +1,6 @@
-import type {
-  DocumentMatch,
-  DocumentRecord,
-  Requirement,
-} from "@applyready/shared";
+import type { DocumentRecord, Requirement } from "@applyready/shared";
 import type { MatchFinding } from "../../providers/interfaces.js";
+import { isSatisfyingMatch } from "../matching/satisfying.js";
 
 export type CandidateMatch = {
   requirementId: string;
@@ -24,7 +21,6 @@ export function isCompanionConstraint(
   if (!requirement.filenamePattern) return false;
   if (/filename/i.test(requirement.title)) return true;
   if (requirement.extractionRule === "filename-pattern") return true;
-  // Filename-bearing packet rule alongside another packet/document requirement.
   const siblings = all.filter(
     (r) =>
       r.id !== requirement.id &&
@@ -54,14 +50,22 @@ export function isExclusiveInstanceRequirement(
   return true;
 }
 
-function isQualifyingStatus(status: MatchFinding["status"] | DocumentMatch["status"]): boolean {
-  return status !== "does_not_match";
+function isMatchCandidate(c: CandidateMatch): boolean {
+  return c.userConfirmed || c.finding.status !== "does_not_match";
+}
+
+function isSatisfyingCandidate(c: CandidateMatch): boolean {
+  return isSatisfyingMatch({
+    status: c.finding.status,
+    confidence: c.finding.confidence,
+    userConfirmed: c.userConfirmed,
+  });
 }
 
 /**
  * Allocate distinct documents to exclusive instance requirements.
- * User-confirmed assignments are honored first and lock documents.
- * Companion constraints may reuse already-allocated documents.
+ * Only satisfying matches (and user-confirmed assignments) consume coverage
+ * slots. Weaker candidates remain visible outside allocation.
  */
 export function allocateDocuments(params: {
   requirements: Requirement[];
@@ -77,7 +81,7 @@ export function allocateDocuments(params: {
 
   const byReq = new Map<string, CandidateMatch[]>();
   for (const c of candidates) {
-    if (!isQualifyingStatus(c.finding.status) && !c.userConfirmed) continue;
+    if (!isMatchCandidate(c)) continue;
     const list = byReq.get(c.requirementId) || [];
     list.push(c);
     byReq.set(c.requirementId, list);
@@ -102,7 +106,7 @@ export function allocateDocuments(params: {
     if (assigned.length > 0) allocations.set(req.id, assigned);
   }
 
-  // 2. Allocate remaining exclusive requirements greedily by confidence.
+  // 2. Allocate remaining exclusive requirements from satisfying candidates only.
   const exclusiveReqs = requirements
     .filter(
       (r) =>
@@ -124,13 +128,13 @@ export function allocateDocuments(params: {
     if (existing.length >= min) continue;
     const assigned = [...existing];
     const pool = (byReq.get(req.id) || [])
+      .filter((c) => isSatisfyingCandidate(c))
       .filter((c) => !c.userConfirmed || assigned.includes(c.documentId))
       .sort((a, b) => b.finding.confidence - a.finding.confidence);
 
     for (const c of pool) {
       if (assigned.includes(c.documentId)) continue;
       if (lockedDocuments.has(c.documentId)) continue;
-      if (!isQualifyingStatus(c.finding.status) && !c.userConfirmed) continue;
       assigned.push(c.documentId);
       lockedDocuments.add(c.documentId);
       if (assigned.length >= min) break;
@@ -138,10 +142,9 @@ export function allocateDocuments(params: {
     allocations.set(req.id, assigned);
   }
 
-  // 3. Companions and non-exclusive: prefer best match, may share.
+  // 3. Companions and non-exclusive: satisfying matches only; may share.
   for (const req of requirements) {
     if (isExclusiveInstanceRequirement(req, requirements)) {
-      // Exclusive requirements are fully handled above (even if uncovered).
       continue;
     }
     if (allocations.has(req.id) && (allocations.get(req.id) || []).length > 0) {
@@ -156,13 +159,12 @@ export function allocateDocuments(params: {
     }
     if (req.category === "other" && !req.filenamePattern) continue;
 
-    const pool = (byReq.get(req.id) || []).sort(
-      (a, b) => b.finding.confidence - a.finding.confidence,
-    );
+    const pool = (byReq.get(req.id) || [])
+      .filter((c) => isSatisfyingCandidate(c))
+      .sort((a, b) => b.finding.confidence - a.finding.confidence);
     const assigned: string[] = [];
     const min = Math.max(1, req.minimumCount || 1);
     for (const c of pool) {
-      if (!isQualifyingStatus(c.finding.status) && !c.userConfirmed) continue;
       if (assigned.includes(c.documentId)) continue;
       assigned.push(c.documentId);
       if (assigned.length >= min) break;
@@ -171,4 +173,21 @@ export function allocateDocuments(params: {
   }
 
   return { allocations, lockedDocuments };
+}
+
+/** Distinct satisfying document IDs for a requirement (for min/max counts). */
+export function distinctSatisfyingDocumentIds(
+  candidates: CandidateMatch[],
+  requirementId: string,
+): string[] {
+  return [
+    ...new Set(
+      candidates
+        .filter(
+          (c) =>
+            c.requirementId === requirementId && isSatisfyingCandidate(c),
+        )
+        .map((c) => c.documentId),
+    ),
+  ];
 }

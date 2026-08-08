@@ -7,6 +7,7 @@ import type {
   Requirement,
   DocumentMatch,
 } from "@applyready/shared";
+import { isSatisfyingMatch } from "../matching/satisfying.js";
 
 const ELIGIBILITY_ISSUE_CODES = new Set([
   "MINIMUM_GPA",
@@ -46,14 +47,6 @@ function needsConflictConfirmation(c: ProfileConflict): boolean {
 /** Active conflict the user confirmed as a real mismatch — blocking. */
 function isConfirmedMismatch(c: ProfileConflict): boolean {
   return c.equivalent === false;
-}
-
-function isSatisfyingMatch(match: DocumentMatch): boolean {
-  return (
-    match.userConfirmed ||
-    match.status === "confirmed" ||
-    (match.status === "likely" && match.confidence >= 0.8)
-  );
 }
 
 export function computeReadiness(params: {
@@ -107,7 +100,13 @@ export function computeReadiness(params: {
 
   for (const req of required) {
     const reqMatches = matchesByRequirement.get(req.id) || [];
-    const satisfying = reqMatches.filter(isSatisfyingMatch);
+    const satisfying = reqMatches.filter((m) =>
+      isSatisfyingMatch({
+        status: m.status,
+        confidence: m.confidence,
+        userConfirmed: m.userConfirmed,
+      }),
+    );
     // Distinct documents only
     const distinctDocs = new Set(satisfying.map((m) => m.documentId));
     const minCount = Math.max(1, req.minimumCount || 1);
@@ -197,7 +196,15 @@ export function computeReadiness(params: {
   const missingRequiredDocs = required.some((req) => {
     const reqMatches = matchesByRequirement.get(req.id) || [];
     const distinctDocs = new Set(
-      reqMatches.filter(isSatisfyingMatch).map((m) => m.documentId),
+      reqMatches
+        .filter((m) =>
+          isSatisfyingMatch({
+            status: m.status,
+            confidence: m.confidence,
+            userConfirmed: m.userConfirmed,
+          }),
+        )
+        .map((m) => m.documentId),
     );
     return distinctDocs.size < Math.max(1, req.minimumCount || 1);
   });

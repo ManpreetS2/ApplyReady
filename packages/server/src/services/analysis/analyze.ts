@@ -11,8 +11,10 @@ import { computeReadiness } from "../readiness/score.js";
 import { assessDeadline } from "../deadlines/assess.js";
 import {
   allocateDocuments,
+  distinctSatisfyingDocumentIds,
   type CandidateMatch,
 } from "./coverage.js";
+import { isSatisfyingMatch } from "../matching/satisfying.js";
 
 export function analyzeApplication(db: Database.Database, applicationId: string) {
   const repos = new Repositories(db);
@@ -245,7 +247,7 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
     const minCount = Math.max(1, requirement.minimumCount || 1);
     const maxCount = requirement.maximumCount;
 
-    // Distinct allocated docs used for coverage.
+    // Coverage uses allocated docs that are genuinely satisfying.
     const qualifyingDocs = [
       ...new Set(
         allocated.filter((docId) =>
@@ -253,51 +255,74 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
             (c) =>
               c.requirementId === requirement.id &&
               c.documentId === docId &&
-              (c.userConfirmed || c.finding.status !== "does_not_match"),
+              isSatisfyingMatch({
+                status: c.finding.status,
+                confidence: c.finding.confidence,
+                userConfirmed: c.userConfirmed,
+              }),
           ),
         ),
       ),
     ];
 
-    // All distinct qualifying candidates (for maximumCount checks).
-    const allQualifyingDistinct = [
-      ...new Set(
-        candidates
-          .filter(
-            (c) =>
-              c.requirementId === requirement.id &&
-              (c.userConfirmed || c.finding.status !== "does_not_match"),
-          )
-          .map((c) => c.documentId),
-      ),
-    ];
+    // Cardinality uses the same satisfying predicate (not mere candidates).
+    const allQualifyingDistinct = distinctSatisfyingDocumentIds(
+      candidates,
+      requirement.id,
+    );
+
+    const reqCandidates = candidates
+      .filter(
+        (c) =>
+          c.requirementId === requirement.id &&
+          (c.userConfirmed || c.finding.status !== "does_not_match"),
+      )
+      .sort((a, b) => b.finding.confidence - a.finding.confidence);
 
     if (requirement.required && qualifyingDocs.length < minCount) {
-      repos.insertIssue({
-        id: newId(),
-        applicationId,
-        requirementId: requirement.id,
-        documentId: null,
-        severity: "blocking",
-        code:
-          minCount > 1 ? "INSUFFICIENT_DOCUMENT_COUNT" : "MISSING_DOCUMENT",
-        title:
-          minCount > 1
-            ? `Need ${minCount} documents for ${requirement.title}`
-            : `Missing: ${requirement.title}`,
-        explanation:
-          minCount > 1
-            ? `This requirement needs ${minCount} distinct qualifying documents; found ${qualifyingDocs.length}.`
-            : `No uploaded document was matched to the required item "${requirement.title}".`,
-        evidence: requirement.sourceEvidence,
-        recommendedFix:
-          minCount > 1
-            ? `Upload ${minCount} distinct ${requirement.category.replaceAll("_", " ")} documents, or assign existing ones.`
-            : `Upload a ${requirement.category.replaceAll("_", " ")} that satisfies this requirement, or manually assign an existing document.`,
-        status: "open",
-        dismissible: false,
-      });
-      continue;
+      const hasWeakCandidates = reqCandidates.some(
+        (c) =>
+          !isSatisfyingMatch({
+            status: c.finding.status,
+            confidence: c.finding.confidence,
+            userConfirmed: c.userConfirmed,
+          }),
+      );
+      // minCount=1 with only weak candidates → confirmation UX, not MISSING.
+      // Still emit INSUFFICIENT when more than one qualifying doc is required
+      // (or when some but not enough are already satisfying).
+      const emitCardinalityGap =
+        minCount > 1 ||
+        qualifyingDocs.length > 0 ||
+        !hasWeakCandidates;
+      if (emitCardinalityGap) {
+        repos.insertIssue({
+          id: newId(),
+          applicationId,
+          requirementId: requirement.id,
+          documentId: null,
+          severity: "blocking",
+          code:
+            minCount > 1 || qualifyingDocs.length > 0
+              ? "INSUFFICIENT_DOCUMENT_COUNT"
+              : "MISSING_DOCUMENT",
+          title:
+            minCount > 1 || qualifyingDocs.length > 0
+              ? `Need ${minCount} documents for ${requirement.title}`
+              : `Missing: ${requirement.title}`,
+          explanation:
+            minCount > 1 || qualifyingDocs.length > 0
+              ? `This requirement needs ${minCount} distinct qualifying documents; found ${qualifyingDocs.length}.`
+              : `No uploaded document was matched to the required item "${requirement.title}".`,
+          evidence: requirement.sourceEvidence,
+          recommendedFix:
+            minCount > 1 || qualifyingDocs.length > 0
+              ? `Upload ${minCount} distinct ${requirement.category.replaceAll("_", " ")} documents, or assign existing ones.`
+              : `Upload a ${requirement.category.replaceAll("_", " ")} that satisfies this requirement, or manually assign an existing document.`,
+          status: "open",
+          dismissible: false,
+        });
+      }
     }
 
     if (maxCount != null && allQualifyingDistinct.length > maxCount) {
@@ -317,8 +342,18 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       });
     }
 
-    // Validate each allocated document.
-    for (const docId of qualifyingDocs) {
+    // Validate satisfying allocations plus best match candidates so content
+    // issues (word limits, org name, etc.) still surface before confirmation.
+    const docsToValidate = [
+      ...new Set([
+        ...qualifyingDocs,
+        ...reqCandidates
+          .slice(0, Math.max(minCount, maxCount ?? minCount, 1))
+          .map((c) => c.documentId),
+      ]),
+    ];
+
+    for (const docId of docsToValidate) {
       const document = documents.find((d) => d.id === docId);
       if (!document) continue;
       const text = repos.getDocumentText(document.id) || "";
@@ -364,24 +399,20 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       }
     }
 
-    const bestDocId = qualifyingDocs[0];
-    const bestCandidate = bestDocId
-      ? candidates.find(
-          (c) =>
-            c.requirementId === requirement.id && c.documentId === bestDocId,
-        )
-      : null;
+    const bestCandidate = reqCandidates[0] ?? null;
     if (
       bestCandidate &&
-      (bestCandidate.finding.status === "needs_confirmation" ||
-        bestCandidate.finding.status === "possible") &&
-      !bestCandidate.userConfirmed
+      !isSatisfyingMatch({
+        status: bestCandidate.finding.status,
+        confidence: bestCandidate.finding.confidence,
+        userConfirmed: bestCandidate.userConfirmed,
+      })
     ) {
       repos.insertIssue({
         id: newId(),
         applicationId,
         requirementId: requirement.id,
-        documentId: bestDocId!,
+        documentId: bestCandidate.documentId,
         severity: "needs_confirmation",
         code: "MATCH_NEEDS_CONFIRMATION",
         title: `Confirm match for ${requirement.title}`,

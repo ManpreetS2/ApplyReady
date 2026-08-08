@@ -216,24 +216,20 @@ function extractDeadline(text: string): string | null {
   return withTime?.[1]?.trim() ?? null;
 }
 
-function detectOrganizationExpected(
-  sentence: string,
-  contextOrg: string | null | undefined,
-): string | null {
-  const addressing =
-    /\b(?:address(?:ed)?\s+to|address(?:ed)?\s+the\s+(?:letter|essay|recommendation)\s+to|must\s+reference|should\s+reference|reference\s+the|for\s+the)\b/i.test(
-      sentence,
-    ) ||
-    /\b(?:discuss|mention|name)\b[\s\S]{0,80}\b(?:scholarship|organization|foundation)\b/i.test(
+function detectOrganizationExpected(sentence: string): string | null {
+  // Require an explicit addressing/reference verb — never generic "for the".
+  const explicitVerb =
+    /\b(?:address(?:ed)?\s+(?:the\s+)?(?:letter|essay|recommendation|statement)?\s*to|must\s+be\s+addressed\s+to|address(?:ed)?\s+to|must\s+reference|should\s+reference|must\s+name|should\s+name|name\s+[A-Z]|reference\s+[A-Z]|discuss[\s\S]{0,40}(?:Scholarship|Foundation))\b/i.test(
       sentence,
     );
-  if (!addressing) return null;
-  // Prefer an organization name appearing in the sentence itself.
+  if (!explicitVerb) return null;
+
+  // Only set when a concrete organization name appears in the same evidence.
   const named = sentence.match(
     /\b([A-Z][A-Za-z0-9 &'-]{2,60}(?:Scholarship|Foundation|Program|Fellowship))\b/,
   );
-  if (named?.[1]) return named[1].trim();
-  return contextOrg?.trim() || null;
+  if (!named?.[1]) return null;
+  return named[1].trim();
 }
 
 function detectSignatureRequired(sentence: string): boolean {
@@ -359,10 +355,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
             pageLimitMaximum: pages.max,
             filenamePattern,
             signatureRequired,
-            organizationNameExpected: detectOrganizationExpected(
-              sentence,
-              context.organization,
-            ),
+            organizationNameExpected: detectOrganizationExpected(sentence),
             requiredKeywords: [],
           }),
         );
@@ -387,10 +380,7 @@ export class RuleRequirementExtractor implements RequirementExtractor {
               extractionRule: "filename-pattern",
               acceptedFileExtensions: [".pdf"],
               filenamePattern,
-              organizationNameExpected: detectOrganizationExpected(
-                sentence,
-                context.organization,
-              ),
+              organizationNameExpected: detectOrganizationExpected(sentence),
             }),
           );
         }

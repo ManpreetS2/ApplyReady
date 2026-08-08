@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { config } from "../../config.js";
+import { withTransaction } from "../../db/database.js";
 import { Repositories } from "../../db/repositories.js";
 import { AppError } from "../../utils/errors.js";
 import { deleteFileQuietly, resolveUploadPath } from "../../utils/files.js";
@@ -18,6 +19,18 @@ import {
   buildDemoTranscriptPdf,
 } from "./content.js";
 import { withDemoLock } from "./lock.js";
+
+/** Test-only: force a failure during staged demo reset initialization. */
+let resetFailAfter: "ingest" | "seed" | null = null;
+
+export function setDemoResetTestHooks(
+  hooks: { failAfter?: "ingest" | "seed" | null } | null,
+): void {
+  if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
+    throw new Error("setDemoResetTestHooks is only available in tests");
+  }
+  resetFailAfter = hooks?.failAfter ?? null;
+}
 
 export const DEMO_STEPS = [
   {
@@ -57,6 +70,65 @@ export const DEMO_STEPS = [
     summary: "All required items verified. Ready to submit.",
   },
 ] as const;
+
+async function confirmExtractedRequirements(
+  repos: Repositories,
+  applicationId: string,
+) {
+  for (const req of repos.listRequirements(applicationId)) {
+    if (req.certainty === "uncertain") {
+      const certainty = req.category === "portfolio" ? "optional" : "required";
+      repos.updateRequirement(req.id, {
+        certainty,
+        required: certainty === "required",
+        userConfirmed: true,
+        applicability: "applicable",
+      });
+    } else {
+      repos.updateRequirement(req.id, {
+        userConfirmed: true,
+        applicability: req.conditional ? "applicable" : req.applicability,
+      });
+    }
+  }
+}
+
+/**
+ * Fully initialize guided-demo contents on an existing application row.
+ * Used by start and by staged reset.
+ */
+async function initializeGuidedDemoContents(
+  db: Database.Database,
+  applicationId: string,
+) {
+  const repos = new Repositories(db);
+  await ingestPastedText(
+    db,
+    applicationId,
+    DEMO_REQUIREMENTS_TEXT,
+    "Future Engineers Scholarship Requirements",
+  );
+  if (resetFailAfter === "ingest") {
+    throw new Error("Injected demo reset failure after ingest");
+  }
+  await confirmExtractedRequirements(repos, applicationId);
+  await seedInitialDemoDocs(db, applicationId);
+  if (resetFailAfter === "seed") {
+    throw new Error("Injected demo reset failure after seed");
+  }
+  return analyzeApplication(db, applicationId);
+}
+
+async function destroyDemoApplication(
+  db: Database.Database,
+  applicationId: string,
+) {
+  const repos = new Repositories(db);
+  const docs = repos.deleteApplication(applicationId);
+  for (const doc of docs) {
+    deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
+  }
+}
 
 async function seedInitialDemoDocs(db: Database.Database, applicationId: string) {
   await processUploadedDocument(db, {
@@ -215,33 +287,7 @@ export async function startGuidedDemo(db: Database.Database) {
   });
 
   try {
-    await ingestPastedText(
-      db,
-      app.id,
-      DEMO_REQUIREMENTS_TEXT,
-      "Future Engineers Scholarship Requirements",
-    );
-
-    // Confirm extracted requirements for a clean demo path
-    for (const req of repos.listRequirements(app.id)) {
-      if (req.certainty === "uncertain") {
-        const certainty = req.category === "portfolio" ? "optional" : "required";
-        repos.updateRequirement(req.id, {
-          certainty,
-          required: certainty === "required",
-          userConfirmed: true,
-          applicability: "applicable",
-        });
-      } else {
-        repos.updateRequirement(req.id, {
-          userConfirmed: true,
-          applicability: req.conditional ? "applicable" : req.applicability,
-        });
-      }
-    }
-
-    await seedInitialDemoDocs(db, app.id);
-    const analysis = analyzeApplication(db, app.id);
+    const analysis = await initializeGuidedDemoContents(db, app.id);
     repos.updateApplication(app.id, { demoStep: 0 });
     repos.addActivity(app.id, "demo_started", "Guided demo started");
 
@@ -251,12 +297,8 @@ export async function startGuidedDemo(db: Database.Database) {
       analysis,
     };
   } catch (error) {
-    // Compensating cleanup — do not leave partial demos.
     try {
-      const docs = repos.deleteApplication(app.id);
-      for (const doc of docs) {
-        deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
-      }
+      await destroyDemoApplication(db, app.id);
     } catch (cleanupError) {
       const message =
         cleanupError instanceof Error ? cleanupError.message : "unknown error";
@@ -433,63 +475,47 @@ export async function resetGuidedDemo(db: Database.Database, applicationId: stri
       throw new AppError("NOT_DEMO", "Application is not a guided demo.", 400);
     }
 
-    // Reset in place — preserve the same demo ID for session continuity.
-    // Only retire the old state after the replacement initialization succeeds.
+    // Stage a complete replacement under a temporary application. The live
+    // demo is untouched until staging succeeds and a DB transaction swaps
+    // ownership. Old files are deleted only after that commit.
     const previousDocs = repos.listDocuments(applicationId);
+    const previousReqCount = repos.listRequirements(applicationId).length;
+    const previousDemoStep = app.demoStep;
 
-    // Clear analysis artifacts and matches by wiping derived state.
-    repos.clearAnalysis(applicationId);
-    for (const issue of repos.listIssues(applicationId)) {
-      repos.updateIssue(issue.id, "dismissed");
-    }
+    const staging = repos.createApplication({
+      name: "Future Engineers Scholarship",
+      organization: "Future Engineers Scholarship",
+      type: "scholarship",
+      deadline: "2026-10-15",
+      notes: "Guided demo staging (temporary)",
+      isDemo: false,
+      demoStep: 0,
+    });
 
-    // Remove existing requirements and documents, then re-seed.
-    for (const req of repos.listRequirements(applicationId)) {
-      repos.deleteRequirement(req.id);
-    }
-    for (const doc of previousDocs) {
-      repos.deleteDocument(doc.id);
-    }
-
+    let stagingDocs: ReturnType<Repositories["listDocuments"]> = [];
     try {
-      await ingestPastedText(
-        db,
-        applicationId,
-        DEMO_REQUIREMENTS_TEXT,
-        "Future Engineers Scholarship Requirements",
-      );
-      for (const req of repos.listRequirements(applicationId)) {
-        if (req.certainty === "uncertain") {
-          const certainty = req.category === "portfolio" ? "optional" : "required";
-          repos.updateRequirement(req.id, {
-            certainty,
-            required: certainty === "required",
-            userConfirmed: true,
-            applicability: "applicable",
-          });
-        } else {
-          repos.updateRequirement(req.id, {
-            userConfirmed: true,
-            applicability: req.conditional ? "applicable" : req.applicability,
-          });
-        }
-      }
-      await seedInitialDemoDocs(db, applicationId);
-      const analysis = analyzeApplication(db, applicationId);
-      repos.updateApplication(applicationId, {
-        demoStep: 0,
-        readinessScore: analysis.report.score,
-        readinessStatus: analysis.report.status,
-        lastAnalyzedAt: analysis.report.generatedAt,
-        deadline: "2026-10-15",
-        notes: "Guided demo application packet",
-      });
-      repos.addActivity(applicationId, "demo_reset", "Guided demo reset in place");
+      await initializeGuidedDemoContents(db, staging.id);
+      stagingDocs = repos.listDocuments(staging.id);
 
-      // Delete old files only after successful re-seed.
+      withTransaction(db, () => {
+        repos.clearApplicationContents(applicationId);
+        repos.transferApplicationContents(staging.id, applicationId);
+        repos.updateApplication(applicationId, {
+          demoStep: 0,
+          deadline: "2026-10-15",
+          notes: "Guided demo application packet",
+          name: "Future Engineers Scholarship",
+          organization: "Future Engineers Scholarship",
+        });
+        repos.addActivity(applicationId, "demo_reset", "Guided demo reset in place");
+      });
+
+      // DB swap committed — retire previous files only now.
       for (const doc of previousDocs) {
         deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
       }
+
+      const analysis = analyzeApplication(db, applicationId);
 
       return {
         application: repos.getApplication(applicationId),
@@ -497,14 +523,40 @@ export async function resetGuidedDemo(db: Database.Database, applicationId: stri
         analysis,
       };
     } catch (error) {
-      // If reset fails mid-way, attempt to restore a minimal usable demo on same ID.
+      // Staging failed or swap rolled back — live demo must remain intact.
       try {
-        if (repos.listDocuments(applicationId).length === 0) {
-          await seedInitialDemoDocs(db, applicationId);
-          analyzeApplication(db, applicationId);
+        if (repos.getApplication(staging.id)) {
+          await destroyDemoApplication(db, staging.id);
+        } else {
+          // Staging row may already be gone; remove only orphaned staging files.
+          const liveStored = new Set(
+            repos
+              .listDocuments(applicationId)
+              .map((d) => d.storedFilename),
+          );
+          for (const doc of stagingDocs) {
+            if (!liveStored.has(doc.storedFilename)) {
+              deleteFileQuietly(
+                resolveUploadPath("applications", doc.storedFilename),
+              );
+            }
+          }
         }
-      } catch {
-        // swallow secondary failure
+      } catch (cleanupError) {
+        const message =
+          cleanupError instanceof Error ? cleanupError.message : "unknown error";
+        console.error(`[applyready] demo reset staging cleanup failed: ${message}`);
+      }
+
+      const still = repos.getApplication(applicationId);
+      if (
+        !still ||
+        repos.listDocuments(applicationId).length !== previousDocs.length ||
+        repos.listRequirements(applicationId).length !== previousReqCount
+      ) {
+        console.error(
+          `[applyready] demo reset failure left unexpected state for ${applicationId} (step was ${previousDemoStep})`,
+        );
       }
       throw error;
     }
