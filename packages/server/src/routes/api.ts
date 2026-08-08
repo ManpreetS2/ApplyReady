@@ -36,7 +36,7 @@ import {
 } from "../utils/files.js";
 import { newId } from "../utils/ids.js";
 import { analyzeApplication } from "../services/analysis/analyze.js";
-import { processUploadedDocument } from "../services/documents/process.js";
+import { processUploadedDocument, processVaultDocument } from "../services/documents/process.js";
 import {
   ingestPastedText,
   ingestUploadedSource,
@@ -344,7 +344,7 @@ export function createApiRouter(db: Database.Database): Router {
             "Uncertain requirements must be resolved as required or optional.",
             400,
             [
-              "Send { \"certainty\": \"required\" } or { \"certainty\": \"optional\" } when confirming.",
+              'Send { "certainty": "required" } or { "certainty": "optional" } when confirming.',
             ],
           );
         }
@@ -353,6 +353,7 @@ export function createApiRouter(db: Database.Database): Router {
           required: body.certainty === "required",
           userConfirmed: true,
           confidence: Math.max(current.confidence, 0.9),
+          ...(body.applicability ? { applicability: body.applicability } : {}),
         });
         res.json({ requirement });
         return;
@@ -364,6 +365,7 @@ export function createApiRouter(db: Database.Database): Router {
               required: body.certainty === "required",
             }
           : {}),
+        ...(body.applicability ? { applicability: body.applicability } : {}),
         userConfirmed: true,
         confidence: Math.max(current.confidence, 0.9),
       });
@@ -496,6 +498,13 @@ export function createApiRouter(db: Database.Database): Router {
           400,
         );
       }
+      if (body.status === "resolved" && !issue.dismissible) {
+        throw new AppError(
+          "ISSUE_REQUIRES_FIX",
+          "This issue cannot be manually marked resolved. Fix the underlying condition and reanalyze.",
+          400,
+        );
+      }
       const updated = repos.updateIssue(req.params.id!, body.status);
       res.json({ issue: updated });
     }),
@@ -610,34 +619,15 @@ export function createApiRouter(db: Database.Database): Router {
         notes: req.body.notes || null,
         expirationDate: req.body.expirationDate || null,
       });
-      const processed = await processUploadedDocument(db, {
-        applicationId: null,
+      const processed = await processVaultDocument(db, {
         buffer: req.file.buffer,
         originalFilename: req.file.originalname,
         mimeType: req.file.mimetype,
-        categoryHint: meta.category,
-      });
-      // move into vault table — processUploadedDocument stored under applications if app id null uses vault path
-      // Actually process with applicationId null uses kind vault. But it also inserts into documents table.
-      // For vault we want vault_documents. Let's create vault record from processed file.
-      const vault = repos.createVault({
-        id: newId(),
-        originalFilename: processed.document.originalFilename,
-        storedFilename: processed.document.storedFilename,
-        mimeType: processed.document.mimeType,
-        fileSize: processed.document.fileSize,
         category: meta.category,
-        version: 1,
         notes: meta.notes ?? null,
         expirationDate: meta.expirationDate ?? null,
-        wordCount: processed.document.wordCount,
-        pageCount: processed.document.pageCount,
-        extractedSummary: processed.summary,
-        parseStatus: processed.document.parseStatus,
       });
-      // remove orphan documents row created with null application
-      repos.deleteDocument(processed.document.id);
-      res.status(201).json({ document: vault });
+      res.status(201).json({ document: processed.vault });
     }),
   );
 

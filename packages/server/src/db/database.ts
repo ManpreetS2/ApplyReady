@@ -41,11 +41,54 @@ export function migrateSchema(instance: Database.Database): void {
     );
   }
 
+  if (!requirementCols.has("applicability")) {
+    instance.exec(
+      `ALTER TABLE requirements ADD COLUMN applicability TEXT NOT NULL DEFAULT 'applicable'`,
+    );
+    // Existing conditional requirements start unknown until the applicant decides.
+    instance.exec(
+      `UPDATE requirements SET applicability = 'unknown' WHERE conditional = 1`,
+    );
+  }
+
   const profileCols = columnNames(instance, "applicant_profiles");
   if (!profileCols.has("currently_enrolled")) {
     instance.exec(
       `ALTER TABLE applicant_profiles ADD COLUMN currently_enrolled INTEGER`,
     );
+  }
+
+  if (!profileCols.has("confirmed_fields")) {
+    instance.exec(
+      `ALTER TABLE applicant_profiles ADD COLUMN confirmed_fields TEXT NOT NULL DEFAULT '[]'`,
+    );
+    // Migrate only currently populated values when the legacy global flag is set.
+    // Empty/null future fields are intentionally left unconfirmed.
+    const rows = instance
+      .prepare(
+        `SELECT id, full_legal_name, email, phone, school, major, gpa,
+                expected_graduation_date, target_organization, currently_enrolled,
+                user_confirmed
+         FROM applicant_profiles`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    const update = instance.prepare(
+      `UPDATE applicant_profiles SET confirmed_fields=? WHERE id=?`,
+    );
+    for (const row of rows) {
+      if (!row.user_confirmed) continue;
+      const fields: string[] = [];
+      if (row.full_legal_name) fields.push("fullLegalName");
+      if (row.email) fields.push("email");
+      if (row.phone) fields.push("phone");
+      if (row.school) fields.push("school");
+      if (row.major) fields.push("major");
+      if (row.gpa) fields.push("gpa");
+      if (row.expected_graduation_date) fields.push("expectedGraduationDate");
+      if (row.target_organization) fields.push("targetOrganization");
+      if (row.currently_enrolled != null) fields.push("currentlyEnrolled");
+      update.run(JSON.stringify(fields), row.id);
+    }
   }
 
   // Triggers are idempotent via IF NOT EXISTS in schema.sql; re-exec is safe.

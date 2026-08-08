@@ -66,6 +66,16 @@ export function mapSource(row: Record<string, unknown>): RequirementSource {
 }
 
 export function mapRequirement(row: Record<string, unknown>): Requirement {
+  const conditional = Boolean(row.conditional);
+  const rawApplicability = row.applicability;
+  const applicability =
+    rawApplicability === "applicable" ||
+    rawApplicability === "not_applicable" ||
+    rawApplicability === "unknown"
+      ? rawApplicability
+      : conditional
+        ? "unknown"
+        : "applicable";
   return {
     id: String(row.id),
     applicationId: String(row.application_id),
@@ -75,8 +85,9 @@ export function mapRequirement(row: Record<string, unknown>): Requirement {
     category: row.category as Requirement["category"],
     required: Boolean(row.required),
     certainty: normalizeCertainty(row.certainty, Boolean(row.required)),
-    conditional: Boolean(row.conditional),
+    conditional,
     conditionText: (row.condition_text as string | null) ?? null,
+    applicability,
     sourceType: (row.source_type as Requirement["sourceType"]) ?? null,
     sourceName: (row.source_name as string | null) ?? null,
     sourceUrl: (row.source_url as string | null) ?? null,
@@ -219,6 +230,20 @@ export function mapProfile(row: Record<string, unknown>): ApplicantProfile {
         ? null
         : Boolean(row.currently_enrolled),
     userConfirmed: Boolean(row.user_confirmed),
+    confirmedFields: jsonArray(row.confirmed_fields as string).filter(
+      (f): f is ApplicantProfile["confirmedFields"][number] =>
+        [
+          "fullLegalName",
+          "email",
+          "phone",
+          "school",
+          "major",
+          "gpa",
+          "expectedGraduationDate",
+          "targetOrganization",
+          "currentlyEnrolled",
+        ].includes(f),
+    ),
     updatedAt: String(row.updated_at),
   };
 }

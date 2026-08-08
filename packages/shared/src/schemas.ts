@@ -51,6 +51,9 @@ export const createRequirementSchema = z.object({
   certainty: z.enum(["required", "optional", "uncertain"]).optional(),
   conditional: z.boolean().default(false),
   conditionText: z.string().nullable().optional(),
+  applicability: z
+    .enum(["applicable", "not_applicable", "unknown"])
+    .optional(),
   sourceEvidence: z.string().default("Manually added by user"),
   sourceLocation: z.string().nullable().optional(),
   acceptedDocumentTypes: z.array(z.string()).default([]),
@@ -70,13 +73,21 @@ export const createRequirementSchema = z.object({
   customValidationNotes: z.string().nullable().optional(),
 });
 
+export const requirementApplicabilitySchema = z.enum([
+  "applicable",
+  "not_applicable",
+  "unknown",
+]);
+
 export const updateRequirementSchema = createRequirementSchema.partial().extend({
   userConfirmed: z.boolean().optional(),
+  applicability: requirementApplicabilitySchema.optional(),
 });
 
 /** Confirm a requirement. Uncertain items must explicitly resolve to required or optional. */
 export const confirmRequirementSchema = z.object({
   certainty: z.enum(["required", "optional"]).optional(),
+  applicability: requirementApplicabilitySchema.optional(),
 });
 
 export const updateMatchSchema = z.object({
@@ -94,6 +105,18 @@ export const updateIssueSchema = z.object({
   status: z.enum(["open", "resolved", "dismissed"]),
 });
 
+export const profileConfirmableFieldSchema = z.enum([
+  "fullLegalName",
+  "email",
+  "phone",
+  "school",
+  "major",
+  "gpa",
+  "expectedGraduationDate",
+  "targetOrganization",
+  "currentlyEnrolled",
+]);
+
 export const updateProfileSchema = z.object({
   fullLegalName: z.string().nullable().optional(),
   preferredName: z.string().nullable().optional(),
@@ -107,6 +130,7 @@ export const updateProfileSchema = z.object({
   targetOrganization: z.string().nullable().optional(),
   currentlyEnrolled: z.boolean().nullable().optional(),
   userConfirmed: z.boolean().optional(),
+  confirmedFields: z.array(profileConfirmableFieldSchema).optional(),
 });
 
 export const resolveConflictSchema = z.object({

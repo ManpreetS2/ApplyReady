@@ -128,7 +128,10 @@ export const api = {
     }),
   confirmRequirement: (
     id: string,
-    body?: { certainty?: "required" | "optional" },
+    body?: {
+      certainty?: "required" | "optional";
+      applicability?: "applicable" | "not_applicable" | "unknown";
+    },
   ) =>
     request<{ requirement: Requirement }>(`/api/requirements/${id}/confirm`, {
       method: "POST",
