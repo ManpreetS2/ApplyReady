@@ -9,8 +9,8 @@ Applicants must submit the following materials:
 
 1. A resume in PDF format is required.
 2. An unofficial transcript is required.
-3. An essay between 400 and 500 words is required. The essay should discuss your interest in engineering and the Future Engineers Scholarship.
-4. One recommendation letter is required.
+3. An essay between 400 and 500 words is required. The essay must reference the Future Engineers Scholarship and discuss your interest in engineering.
+4. One recommendation letter is required. The recommendation letter must be addressed to Future Engineers Scholarship.
 5. Submit a combined packet named LastName_FirstName_2026.pdf.
 6. Submission deadline: October 15, 2026.
 

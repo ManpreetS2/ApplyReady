@@ -132,13 +132,37 @@ function extractPageLimits(sentence: string): {
   min: number | null;
   max: number | null;
 } {
+  const between = sentence.match(
+    /between\s+(\d{1,2})\s*(?:and|–|-|to)\s*(\d{1,2})\s*pages?/i,
+  );
+  if (between) {
+    return { min: Number(between[1]), max: Number(between[2]) };
+  }
+  const range = sentence.match(
+    /\b(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\s*pages?\b/i,
+  );
+  if (range) {
+    return { min: Number(range[1]), max: Number(range[2]) };
+  }
   const max = sentence.match(
     /(?:maximum|no more than|up to|not exceed(?:ing)?)\s+(\d{1,2})\s*pages?/i,
   );
   if (max) return { min: null, max: Number(max[1]) };
-  const exact = sentence.match(/\b(\d{1,2})\s*pages?\b/i);
-  if (exact && /page/i.test(sentence)) {
-    return { min: null, max: Number(exact[1]) };
+  const minOnly = sentence.match(
+    /(?:minimum|at least|no fewer than)\s+(\d{1,2})\s*pages?/i,
+  );
+  if (minOnly) return { min: Number(minOnly[1]), max: null };
+  // Bare "2 pages" / "exactly 2 pages" → exact min=max when clearly a page requirement.
+  const exact = sentence.match(
+    /(?:exactly\s+)?\b(\d{1,2})\s*pages?\b/i,
+  );
+  if (
+    exact &&
+    /page/i.test(sentence) &&
+    !/(?:maximum|minimum|at least|no more|up to|between)/i.test(sentence)
+  ) {
+    const n = Number(exact[1]);
+    return { min: n, max: n };
   }
   return { min: null, max: null };
 }
@@ -185,10 +209,31 @@ function extractRecCount(sentence: string): number | null {
 }
 
 function extractDeadline(text: string): string | null {
-  const m = text.match(
-    /(?:deadline|due(?:\s+date)?|submit by|must be submitted by)[:\s]+([A-Za-z]+ \d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?)/i,
+  // Prefer full cutoff phrases (date + time + optional TZ) over date-only.
+  const withTime = text.match(
+    /(?:deadline|due(?:\s+date)?|submit by|must be submitted by)[:\s]+([A-Za-z]+ \d{1,2},?\s+\d{4}\s+at\s+\d{1,2}:\d{2}\s*(?:AM|PM)?(?:\s+[A-Z]{2,5})?|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?|[A-Za-z]+ \d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i,
   );
-  return m?.[1] ?? null;
+  return withTime?.[1]?.trim() ?? null;
+}
+
+function detectOrganizationExpected(
+  sentence: string,
+  contextOrg: string | null | undefined,
+): string | null {
+  const addressing =
+    /\b(?:address(?:ed)?\s+to|address(?:ed)?\s+the\s+(?:letter|essay|recommendation)\s+to|must\s+reference|should\s+reference|reference\s+the|for\s+the)\b/i.test(
+      sentence,
+    ) ||
+    /\b(?:discuss|mention|name)\b[\s\S]{0,80}\b(?:scholarship|organization|foundation)\b/i.test(
+      sentence,
+    );
+  if (!addressing) return null;
+  // Prefer an organization name appearing in the sentence itself.
+  const named = sentence.match(
+    /\b([A-Z][A-Za-z0-9 &'-]{2,60}(?:Scholarship|Foundation|Program|Fellowship))\b/,
+  );
+  if (named?.[1]) return named[1].trim();
+  return contextOrg?.trim() || null;
 }
 
 function detectSignatureRequired(sentence: string): boolean {
@@ -205,9 +250,9 @@ function emptyDraft(
     >,
 ): ExtractedRequirementDraft {
   const certainty = partial.certainty ?? "uncertain";
+  const conditional = partial.conditional ?? false;
   return {
     description: "",
-    conditional: false,
     conditionText: null,
     sourceLocation: null,
     acceptedDocumentTypes: [],
@@ -228,6 +273,9 @@ function emptyDraft(
     ...partial,
     certainty,
     required: certainty === "required",
+    conditional,
+    applicability:
+      partial.applicability ?? (conditional ? "unknown" : "applicable"),
   };
 }
 
@@ -279,14 +327,18 @@ export class RuleRequirementExtractor implements RequirementExtractor {
         if (filenamePattern) confidence += 0.1;
         if (certainty === "uncertain") confidence -= 0.15;
 
+        const conditional = /\bif\b|\bwhen\b|\bfor applicants who\b|\bif applicable\b/i.test(
+          sentence,
+        );
         drafts.push(
           emptyDraft({
             title: pattern.title,
             description: sentence,
             category: pattern.category,
             certainty,
-            conditional: /\bif\b|\bwhen\b|\bfor applicants who\b/i.test(sentence),
-            conditionText: /\bif\b|\bwhen\b/i.test(sentence) ? sentence : null,
+            conditional,
+            conditionText: conditional ? sentence : null,
+            applicability: conditional ? "unknown" : "applicable",
             sourceEvidence: evidence || sentence,
             sourceLocation: `Sentence ${i + 1}`,
             confidence: confidenceLevel(confidence),
@@ -307,7 +359,10 @@ export class RuleRequirementExtractor implements RequirementExtractor {
             pageLimitMaximum: pages.max,
             filenamePattern,
             signatureRequired,
-            organizationNameExpected: context.organization || null,
+            organizationNameExpected: detectOrganizationExpected(
+              sentence,
+              context.organization,
+            ),
             requiredKeywords: [],
           }),
         );
@@ -332,7 +387,10 @@ export class RuleRequirementExtractor implements RequirementExtractor {
               extractionRule: "filename-pattern",
               acceptedFileExtensions: [".pdf"],
               filenamePattern,
-              organizationNameExpected: context.organization || null,
+              organizationNameExpected: detectOrganizationExpected(
+                sentence,
+                context.organization,
+              ),
             }),
           );
         }
