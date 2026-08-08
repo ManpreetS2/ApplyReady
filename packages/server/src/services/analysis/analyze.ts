@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { Issue, IssueSeverity } from "@applyready/shared";
+import type { Issue, IssueSeverity, Requirement } from "@applyready/shared";
 import { Repositories } from "../../db/repositories.js";
 import { newId } from "../../utils/ids.js";
 import { HeuristicDocumentClassifier, extractHeadings } from "../documents/classify.js";
@@ -9,6 +9,10 @@ import { RuleDocumentValidator } from "../validation/validator.js";
 import { conflictFingerprint } from "../validation/filenamePattern.js";
 import { computeReadiness } from "../readiness/score.js";
 import { assessDeadline } from "../deadlines/assess.js";
+import {
+  allocateDocuments,
+  type CandidateMatch,
+} from "./coverage.js";
 
 export function analyzeApplication(db: Database.Database, applicationId: string) {
   const repos = new Repositories(db);
@@ -23,21 +27,57 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
   const validator = new RuleDocumentValidator();
   const consistency = new ApplicantConsistencyChecker();
 
-  repos.clearAnalysis(applicationId);
-
+  // Preserve decisions before clearAnalysis wipes conflicts/matches.
   const previousConfirmed = new Set(
     previousMatches
       .filter((m) => m.userConfirmed)
       .map((m) => `${m.requirementId}::${m.documentId}`),
   );
-  const resolvedConflictFingerprints = new Set(
+  const previousConflictDecisions = new Map(
     previousConflicts
-      .filter((c) => c.resolved)
-      .map((c) => conflictFingerprint(c.field, c.values)),
+      .filter((c) => c.equivalent != null)
+      .map((c) => [
+        conflictFingerprint(c.field, c.values),
+        { equivalent: c.equivalent as boolean },
+      ]),
   );
 
-  const matches = [];
+  repos.clearAnalysis(applicationId);
+
+  const candidates: CandidateMatch[] = [];
+  const documentIds = new Set(documents.map((d) => d.id));
+  const requirementIds = new Set(requirements.map((r) => r.id));
+
   for (const requirement of requirements) {
+    if (requirement.applicability === "not_applicable") {
+      continue;
+    }
+
+    if (
+      requirement.conditional &&
+      requirement.applicability === "unknown"
+    ) {
+      repos.insertIssue({
+        id: newId(),
+        applicationId,
+        requirementId: requirement.id,
+        documentId: null,
+        severity: "needs_confirmation",
+        code: "CONDITIONAL_APPLICABILITY",
+        title: `Does "${requirement.title}" apply to you?`,
+        explanation:
+          requirement.conditionText ||
+          "This requirement is conditional. Confirm whether it applies before readiness can be Ready.",
+        evidence: requirement.sourceEvidence,
+        recommendedFix:
+          'Mark "Applies to me" or "Does not apply" on this requirement.',
+        status: "open",
+        dismissible: true,
+      });
+      // Still do not treat as required coverage until marked applicable.
+      continue;
+    }
+
     if (requirement.category === "other" && requirement.dateRequirement) {
       validateDeadlineRequirement(repos, {
         applicationId,
@@ -83,9 +123,6 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       continue;
     }
 
-    let best = null as ReturnType<typeof matcher.match> | null;
-    let bestDocId: string | null = null;
-
     for (const document of documents) {
       const text = repos.getDocumentText(document.id) || "";
       const finding = matcher.match({
@@ -104,132 +141,254 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
         },
       });
 
-      if (
-        finding.status !== "does_not_match" &&
-        (!best || finding.confidence > best.confidence)
-      ) {
-        best = finding;
-        bestDocId = document.id;
-      }
+      const confirmed = previousConfirmed.has(
+        `${requirement.id}::${document.id}`,
+      );
 
-      if (finding.status !== "does_not_match") {
-        const confirmed = previousConfirmed.has(
-          `${requirement.id}::${document.id}`,
-        );
-        const saved = repos.upsertMatch({
-          id: newId(),
-          applicationId,
+      // Explicit user-confirmed assignments outrank the heuristic, even when
+      // the matcher would return does_not_match.
+      if (confirmed || finding.status !== "does_not_match") {
+        candidates.push({
           requirementId: requirement.id,
           documentId: document.id,
-          status: confirmed ? "confirmed" : finding.status,
-          confidence: confirmed
-            ? Math.max(finding.confidence, 0.95)
-            : finding.confidence,
-          explanation: finding.explanation,
-          evidence: finding.evidence,
+          finding: confirmed
+            ? {
+                status: "confirmed",
+                confidence: Math.max(finding.confidence, 0.95),
+                explanation:
+                  finding.status === "does_not_match"
+                    ? "Preserved explicit user assignment from a previous review."
+                    : finding.explanation,
+                evidence:
+                  finding.evidence.length > 0
+                    ? finding.evidence
+                    : ["User-confirmed assignment"],
+              }
+            : finding,
           userConfirmed: confirmed,
         });
-        matches.push(saved);
       }
     }
+  }
 
-    const confirmedBest = matches
-      .filter(
-        (m) =>
-          m.requirementId === requirement.id &&
-          m.userConfirmed &&
-          m.status !== "does_not_match",
-      )
-      .sort((a, b) => b.confidence - a.confidence)[0];
-    if (confirmedBest) {
-      best = {
-        status: "confirmed",
-        confidence: confirmedBest.confidence,
-        explanation: confirmedBest.explanation,
-        evidence: confirmedBest.evidence,
-      };
-      bestDocId = confirmedBest.documentId;
-    }
-
-    if (!best || !bestDocId) {
-      if (requirement.required) {
-        repos.insertIssue({
-          id: newId(),
-          applicationId,
-          requirementId: requirement.id,
-          documentId: null,
-          severity: "blocking",
-          code: "MISSING_DOCUMENT",
-          title: `Missing: ${requirement.title}`,
-          explanation: `No uploaded document was matched to the required item "${requirement.title}".`,
-          evidence: requirement.sourceEvidence,
-          recommendedFix: `Upload a ${requirement.category.replaceAll("_", " ")} that satisfies this requirement, or manually assign an existing document.`,
-          status: "open",
-          dismissible: false,
-        });
-      }
+  // Also restore confirmed assignments if requirement+document still exist,
+  // even when the loop above skipped the requirement category (should be rare).
+  for (const key of previousConfirmed) {
+    const [reqId, docId] = key.split("::");
+    if (!reqId || !docId) continue;
+    if (!requirementIds.has(reqId) || !documentIds.has(docId)) continue;
+    const req = requirements.find((r) => r.id === reqId);
+    if (!req || req.applicability === "not_applicable") continue;
+    if (req.certainty === "uncertain") continue;
+    if (
+      req.category === "proof_of_eligibility" ||
+      req.category === "proof_of_enrollment"
+    ) {
       continue;
     }
-
-    const document = documents.find((d) => d.id === bestDocId)!;
-    const text = repos.getDocumentText(document.id) || "";
-    const findings = validator.validate({
-      requirement,
-      documentText: text,
-      filename: document.originalFilename,
-      wordCount: document.wordCount,
-      pageCount: document.pageCount,
-      mimeType: document.mimeType,
-      organization: app.organization,
+    if (candidates.some((c) => c.requirementId === reqId && c.documentId === docId)) {
+      continue;
+    }
+    candidates.push({
+      requirementId: reqId,
+      documentId: docId,
+      finding: {
+        status: "confirmed",
+        confidence: 0.95,
+        explanation: "Preserved explicit user assignment from a previous review.",
+        evidence: ["User-confirmed assignment"],
+      },
+      userConfirmed: true,
     });
+  }
 
-    for (const finding of findings) {
-      repos.insertValidation({
+  const { allocations } = allocateDocuments({
+    requirements,
+    documents,
+    candidates,
+  });
+
+  // Persist all candidate matches (for UI), then validate allocated docs.
+  for (const c of candidates) {
+    repos.upsertMatch({
+      id: newId(),
+      applicationId,
+      requirementId: c.requirementId,
+      documentId: c.documentId,
+      status: c.userConfirmed ? "confirmed" : c.finding.status,
+      confidence: c.finding.confidence,
+      explanation: c.finding.explanation,
+      evidence: c.finding.evidence,
+      userConfirmed: c.userConfirmed,
+    });
+  }
+
+  for (const requirement of requirements) {
+    if (requirement.applicability === "not_applicable") continue;
+    if (
+      requirement.conditional &&
+      requirement.applicability === "unknown"
+    ) {
+      continue;
+    }
+    if (requirement.certainty === "uncertain") continue;
+    if (
+      requirement.category === "proof_of_eligibility" ||
+      requirement.category === "proof_of_enrollment"
+    ) {
+      continue;
+    }
+    if (requirement.category === "other" && requirement.dateRequirement) continue;
+    if (requirement.category === "other" && !requirement.filenamePattern) continue;
+
+    const allocated = allocations.get(requirement.id) || [];
+    const minCount = Math.max(1, requirement.minimumCount || 1);
+    const maxCount = requirement.maximumCount;
+
+    // Distinct allocated docs used for coverage.
+    const qualifyingDocs = [
+      ...new Set(
+        allocated.filter((docId) =>
+          candidates.some(
+            (c) =>
+              c.requirementId === requirement.id &&
+              c.documentId === docId &&
+              (c.userConfirmed || c.finding.status !== "does_not_match"),
+          ),
+        ),
+      ),
+    ];
+
+    // All distinct qualifying candidates (for maximumCount checks).
+    const allQualifyingDistinct = [
+      ...new Set(
+        candidates
+          .filter(
+            (c) =>
+              c.requirementId === requirement.id &&
+              (c.userConfirmed || c.finding.status !== "does_not_match"),
+          )
+          .map((c) => c.documentId),
+      ),
+    ];
+
+    if (requirement.required && qualifyingDocs.length < minCount) {
+      repos.insertIssue({
         id: newId(),
         applicationId,
         requirementId: requirement.id,
-        documentId: document.id,
-        rule: finding.rule,
-        passed: finding.passed,
-        severity: finding.severity,
-        message: finding.message,
-        evidence: finding.evidence,
+        documentId: null,
+        severity: "blocking",
+        code:
+          minCount > 1 ? "INSUFFICIENT_DOCUMENT_COUNT" : "MISSING_DOCUMENT",
+        title:
+          minCount > 1
+            ? `Need ${minCount} documents for ${requirement.title}`
+            : `Missing: ${requirement.title}`,
+        explanation:
+          minCount > 1
+            ? `This requirement needs ${minCount} distinct qualifying documents; found ${qualifyingDocs.length}.`
+            : `No uploaded document was matched to the required item "${requirement.title}".`,
+        evidence: requirement.sourceEvidence,
+        recommendedFix:
+          minCount > 1
+            ? `Upload ${minCount} distinct ${requirement.category.replaceAll("_", " ")} documents, or assign existing ones.`
+            : `Upload a ${requirement.category.replaceAll("_", " ")} that satisfies this requirement, or manually assign an existing document.`,
+        status: "open",
+        dismissible: false,
+      });
+      continue;
+    }
+
+    if (maxCount != null && allQualifyingDistinct.length > maxCount) {
+      repos.insertIssue({
+        id: newId(),
+        applicationId,
+        requirementId: requirement.id,
+        documentId: null,
+        severity: "blocking",
+        code: "TOO_MANY_DOCUMENTS",
+        title: `Too many documents for ${requirement.title}`,
+        explanation: `Found ${allQualifyingDistinct.length} qualifying documents but the maximum is ${maxCount}.`,
+        evidence: requirement.sourceEvidence,
+        recommendedFix: `Keep at most ${maxCount} document(s) assigned to this requirement.`,
+        status: "open",
+        dismissible: false,
+      });
+    }
+
+    // Validate each allocated document.
+    for (const docId of qualifyingDocs) {
+      const document = documents.find((d) => d.id === docId);
+      if (!document) continue;
+      const text = repos.getDocumentText(document.id) || "";
+      const findings = validator.validate({
+        requirement,
+        documentText: text,
+        filename: document.originalFilename,
+        wordCount: document.wordCount,
+        pageCount: document.pageCount,
+        mimeType: document.mimeType,
+        organization: app.organization,
       });
 
-      if (!finding.passed && finding.severity !== "suggestion") {
-        repos.insertIssue({
+      for (const finding of findings) {
+        repos.insertValidation({
           id: newId(),
           applicationId,
           requirementId: requirement.id,
           documentId: document.id,
+          rule: finding.rule,
+          passed: finding.passed,
           severity: finding.severity,
-          code: finding.rule.toUpperCase(),
-          title: issueTitle(finding.rule, requirement.title),
-          explanation: finding.message,
+          message: finding.message,
           evidence: finding.evidence,
-          recommendedFix: fixFor(finding.rule),
-          status: "open",
-          dismissible: finding.severity !== "blocking",
         });
+
+        if (!finding.passed && finding.severity !== "suggestion") {
+          repos.insertIssue({
+            id: newId(),
+            applicationId,
+            requirementId: requirement.id,
+            documentId: document.id,
+            severity: finding.severity,
+            code: finding.rule.toUpperCase(),
+            title: issueTitle(finding.rule, requirement.title),
+            explanation: finding.message,
+            evidence: finding.evidence,
+            recommendedFix: fixFor(finding.rule),
+            status: "open",
+            dismissible: finding.severity !== "blocking",
+          });
+        }
       }
     }
 
+    const bestDocId = qualifyingDocs[0];
+    const bestCandidate = bestDocId
+      ? candidates.find(
+          (c) =>
+            c.requirementId === requirement.id && c.documentId === bestDocId,
+        )
+      : null;
     if (
-      (best.status === "needs_confirmation" || best.status === "possible") &&
-      !previousConfirmed.has(`${requirement.id}::${bestDocId}`)
+      bestCandidate &&
+      (bestCandidate.finding.status === "needs_confirmation" ||
+        bestCandidate.finding.status === "possible") &&
+      !bestCandidate.userConfirmed
     ) {
       repos.insertIssue({
         id: newId(),
         applicationId,
         requirementId: requirement.id,
-        documentId: bestDocId,
+        documentId: bestDocId!,
         severity: "needs_confirmation",
         code: "MATCH_NEEDS_CONFIRMATION",
         title: `Confirm match for ${requirement.title}`,
         explanation:
-          best.explanation ||
+          bestCandidate.finding.explanation ||
           "ApplyReady found a possible match that needs your confirmation.",
-        evidence: best.evidence.join(" | "),
+        evidence: bestCandidate.finding.evidence.join(" | "),
         recommendedFix:
           "Review the evidence and confirm or reassign the document.",
         status: "open",
@@ -322,7 +481,7 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
     }
   }
 
-  // Consistency conflicts — resolution applies to a specific value fingerprint
+  // Consistency conflicts — retain decisions only for still-active fingerprints
   const factsByDocument = documents.map((doc) => ({
     documentId: doc.id,
     filename: doc.originalFilename,
@@ -331,18 +490,68 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
   const conflictFindings = consistency.check(factsByDocument);
   for (const finding of conflictFindings) {
     const fingerprint = conflictFingerprint(finding.field, finding.values);
-    if (resolvedConflictFingerprints.has(fingerprint)) continue;
-    repos.insertConflict({
-      id: newId(),
-      applicationId,
-      field: finding.field,
-      values: finding.values,
-      resolved: false,
-      equivalent: null,
-    });
+    const prior = previousConflictDecisions.get(fingerprint);
+    if (prior) {
+      // equivalent=true → benign; equivalent=false → confirmed mismatch (blocking)
+      repos.insertConflict({
+        id: newId(),
+        applicationId,
+        field: finding.field,
+        values: finding.values,
+        resolved: true,
+        equivalent: prior.equivalent,
+      });
+      if (prior.equivalent === false) {
+        repos.insertIssue({
+          id: newId(),
+          applicationId,
+          requirementId: null,
+          documentId: finding.values[0]?.documentId ?? null,
+          severity: "blocking",
+          code: "CONFIRMED_VALUE_MISMATCH",
+          title: `Confirmed mismatch: ${finding.field}`,
+          explanation:
+            "You confirmed these values are a real mismatch. Correct the underlying documents or profile before the application can be Ready.",
+          evidence: finding.values
+            .map((v) => `${v.source}: ${v.value}`)
+            .join(" | "),
+          recommendedFix:
+            "Update documents so values agree, or mark them equivalent if they are the same fact in different forms.",
+          status: "open",
+          dismissible: false,
+        });
+      }
+    } else {
+      repos.insertConflict({
+        id: newId(),
+        applicationId,
+        field: finding.field,
+        values: finding.values,
+        resolved: false,
+        equivalent: null,
+      });
+      repos.insertIssue({
+        id: newId(),
+        applicationId,
+        requirementId: null,
+        documentId: finding.values[0]?.documentId ?? null,
+        severity: "needs_confirmation",
+        code: "VALUE_CONFLICT",
+        title: `Confirm values for ${finding.field}`,
+        explanation:
+          "Documents disagree on this field. Mark them equivalent or confirm a real mismatch.",
+        evidence: finding.values
+          .map((v) => `${v.source}: ${v.value}`)
+          .join(" | "),
+        recommendedFix:
+          'Use "Mark equivalent" if the values mean the same thing, or "Confirm real mismatch" if they conflict.',
+        status: "open",
+        dismissible: true,
+      });
+    }
   }
 
-  // Populate profile candidates carefully (do not silently overwrite confirmed values)
+  // Populate profile candidates carefully (do not confirm auto-populated fields)
   const profile = repos.getProfile(applicationId);
   if (profile) {
     const patch: Record<string, string | null> = {};
@@ -377,9 +586,17 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
       }
     }
     if (Object.keys(patch).length > 0) {
+      // Intentionally omit userConfirmed / confirmedFields so auto-fill stays unconfirmed.
       repos.updateProfile(applicationId, patch);
     }
   }
+
+  // Top-level application deadline participates in readiness.
+  assessApplicationDeadline(repos, {
+    applicationId,
+    applicationDeadline: app.deadline,
+    requirements,
+  });
 
   const allMatches = repos.listMatches(applicationId);
   const issues = repos.listIssues(applicationId);
@@ -423,6 +640,10 @@ function issueTitle(rule: string, requirementTitle: string): string {
       return `Word limit exceeded for ${requirementTitle}`;
     case "word_limit_min":
       return `Word count too low for ${requirementTitle}`;
+    case "page_limit_max":
+      return `Page limit exceeded for ${requirementTitle}`;
+    case "page_limit_min":
+      return `Page count too low for ${requirementTitle}`;
     case "filename_pattern":
       return "Incorrect filename";
     case "organization_reference":
@@ -444,6 +665,10 @@ function fixFor(rule: string): string {
       return "Shorten the essay to fit within the stated word limit.";
     case "word_limit_min":
       return "Expand the response to meet the minimum word count.";
+    case "page_limit_max":
+      return "Shorten the document to fit within the stated page limit.";
+    case "page_limit_min":
+      return "Expand the document to meet the minimum page count.";
     case "filename_pattern":
       return "Rename the file to match the required pattern exactly.";
     case "organization_reference":
@@ -465,11 +690,20 @@ function parseGpaNumber(raw: string): number | null {
   return n;
 }
 
+function profileFieldConfirmed(
+  profile: NonNullable<ReturnType<Repositories["getProfile"]>>,
+  field: string,
+): boolean {
+  return profile.confirmedFields.includes(
+    field as (typeof profile.confirmedFields)[number],
+  );
+}
+
 function validateEligibilityRequirement(
   repos: Repositories,
   params: {
     applicationId: string;
-    requirement: ReturnType<Repositories["listRequirements"]>[number];
+    requirement: Requirement;
     documents: ReturnType<Repositories["listDocuments"]>;
     organization: string;
   },
@@ -510,7 +744,10 @@ function validateEligibilityRequirement(
         .filter(Boolean)
         .join(" | ") || requirement.sourceEvidence;
 
-    if (profile?.userConfirmed && profile.gpa) {
+    const gpaConfirmed =
+      profile && profile.gpa && profileFieldConfirmed(profile, "gpa");
+
+    if (gpaConfirmed && profile.gpa) {
       chosen = parseGpaNumber(profile.gpa);
       if (chosen == null) {
         unresolved = true;
@@ -531,7 +768,7 @@ function validateEligibilityRequirement(
       if (unique.length === 0) {
         unresolved = true;
         message =
-          "No GPA value was found in a confirmed profile or uploaded documents.";
+          "No GPA value was found in a confirmed profile field or uploaded documents.";
       } else if (unique.length > 1) {
         const spread =
           Math.max(...unique.map((g) => g.value)) -
@@ -594,7 +831,7 @@ function validateEligibilityRequirement(
         explanation: message,
         evidence: requirement.sourceEvidence,
         recommendedFix: unresolved
-          ? "Confirm the correct GPA in the applicant profile (and mark the profile confirmed), then reanalyze."
+          ? "Confirm the correct GPA in the applicant profile (confirm the GPA field), then reanalyze."
           : "Upload a transcript that includes GPA, or confirm the GPA in the applicant profile.",
         status: "open",
         dismissible: unresolved,
@@ -608,11 +845,13 @@ function validateEligibilityRequirement(
     /enroll/i.test(requirement.description)
   ) {
     const enrollmentFacts = allFacts.filter(
-      (f) =>
-        f.fact.factType === "enrollment" &&
-        /\b(enrolled|enrollment|currently attending|full[- ]time student)\b/i.test(
-          `${f.fact.value} ${f.fact.evidence || ""}`,
-        ),
+      (f) => f.fact.factType === "enrollment",
+    );
+    const positive = enrollmentFacts.filter((f) =>
+      /currently_enrolled=true/i.test(f.fact.value),
+    );
+    const negative = enrollmentFacts.filter((f) =>
+      /currently_enrolled=false/i.test(f.fact.value),
     );
 
     let passed = false;
@@ -625,19 +864,37 @@ function validateEligibilityRequirement(
     let issueExplanation =
       "ApplyReady needs explicit enrollment evidence or a confirmed profile enrollment value. A school name or expected graduation date is not enough.";
     let recommendedFix =
-      "Confirm current enrollment in the applicant profile (set currently enrolled and save/confirm the profile), or upload enrollment verification that explicitly indicates current enrollment.";
+      "Confirm current enrollment in the applicant profile (set currently enrolled and save), or upload enrollment verification that explicitly indicates current enrollment.";
 
-    if (enrollmentFacts.length > 0) {
+    if (negative.length > 0) {
+      passed = false;
+      severity = "blocking";
+      issueCode = "ENROLLMENT_FAILED";
+      issueTitle = "Not currently enrolled";
+      message =
+        "Uploaded materials explicitly indicate the applicant is not currently enrolled.";
+      issueExplanation = message;
+      recommendedFix =
+        "Upload current enrollment verification, or update documents if enrollment status changed.";
+    } else if (positive.length > 0) {
       passed = true;
       severity = "suggestion";
       message =
         "Explicit enrollment evidence was found in uploaded materials.";
-    } else if (profile?.userConfirmed && profile.currentlyEnrolled === true) {
+    } else if (
+      profile &&
+      profileFieldConfirmed(profile, "currentlyEnrolled") &&
+      profile.currentlyEnrolled === true
+    ) {
       passed = true;
       severity = "suggestion";
       message =
         "Current enrollment confirmed in the applicant profile.";
-    } else if (profile?.userConfirmed && profile.currentlyEnrolled === false) {
+    } else if (
+      profile &&
+      profileFieldConfirmed(profile, "currentlyEnrolled") &&
+      profile.currentlyEnrolled === false
+    ) {
       passed = false;
       severity = "blocking";
       issueCode = "ENROLLMENT_FAILED";
@@ -648,7 +905,6 @@ function validateEligibilityRequirement(
       recommendedFix =
         "If enrollment status changed, update and confirm the applicant profile, then reanalyze.";
     } else {
-      // currentlyEnrolled null/undefined or profile not confirmed
       passed = false;
       severity = "needs_confirmation";
     }
@@ -657,7 +913,7 @@ function validateEligibilityRequirement(
       id: newId(),
       applicationId,
       requirementId: requirement.id,
-      documentId: enrollmentFacts[0]?.doc.id ?? null,
+      documentId: (negative[0] ?? positive[0])?.doc.id ?? null,
       rule: "enrollment",
       passed,
       severity,
@@ -684,117 +940,237 @@ function validateEligibilityRequirement(
   }
 }
 
-function validateDeadlineRequirement(
+function emitDeadlineAssessment(
   repos: Repositories,
   params: {
     applicationId: string;
-    requirement: ReturnType<Repositories["listRequirements"]>[number];
+    requirementId: string | null;
+    raw: string;
+    evidence: string;
+    sourceLabel: string;
   },
 ) {
-  const { applicationId, requirement } = params;
-  const raw = requirement.dateRequirement || "";
+  const { applicationId, requirementId, raw, evidence, sourceLabel } = params;
   const assessment = assessDeadline(raw);
 
   if (assessment.status === "ambiguous") {
     repos.insertValidation({
       id: newId(),
       applicationId,
-      requirementId: requirement.id,
+      requirementId,
       documentId: null,
       rule: "deadline",
       passed: false,
       severity: "needs_confirmation",
-      message: `Deadline "${raw}" could not be interpreted confidently (${assessment.reason}).`,
-      evidence: requirement.sourceEvidence,
+      message: `Deadline "${raw}" from ${sourceLabel} could not be interpreted confidently (${assessment.reason}).`,
+      evidence,
     });
     repos.insertIssue({
       id: newId(),
       applicationId,
-      requirementId: requirement.id,
+      requirementId,
       documentId: null,
       severity: "needs_confirmation",
       code: "DEADLINE_AMBIGUOUS",
       title: "Deadline needs confirmation",
-      explanation: `ApplyReady could not confidently interpret deadline "${raw}".`,
-      evidence: requirement.sourceEvidence,
+      explanation: `ApplyReady could not confidently interpret deadline "${raw}" (${sourceLabel}).`,
+      evidence,
       recommendedFix:
-        "Confirm the official deadline from the source and update the requirement if needed.",
+        "Confirm the official deadline from the source and update the application or requirement if needed.",
       status: "open",
       dismissible: true,
     });
-    return;
+    return assessment;
   }
 
   if (assessment.status === "past") {
     repos.insertValidation({
       id: newId(),
       applicationId,
-      requirementId: requirement.id,
+      requirementId,
       documentId: null,
       rule: "deadline",
       passed: false,
       severity: "blocking",
-      message: `Deadline ${assessment.original} appears to be in the past.`,
-      evidence: requirement.sourceEvidence,
+      message: `Deadline ${assessment.original} (${sourceLabel}) appears to be in the past.`,
+      evidence,
     });
     repos.insertIssue({
       id: newId(),
       applicationId,
-      requirementId: requirement.id,
+      requirementId,
       documentId: null,
       severity: "blocking",
       code: "DEADLINE_EXPIRED",
       title: "Submission deadline has passed",
-      explanation: `The extracted deadline (${assessment.original}) is before today.`,
-      evidence: requirement.sourceEvidence,
+      explanation: `The deadline (${assessment.original}) from ${sourceLabel} is before now.`,
+      evidence,
       recommendedFix:
         "Verify whether late submissions are accepted, or update the deadline if the source was misread.",
       status: "open",
       dismissible: false,
     });
-    return;
+    return assessment;
   }
 
   if (assessment.status === "today") {
     repos.insertValidation({
       id: newId(),
       applicationId,
-      requirementId: requirement.id,
+      requirementId,
       documentId: null,
       rule: "deadline",
       passed: true,
       severity: "needs_confirmation",
-      message: `Deadline is today (${assessment.original}). End-of-day timing was not assumed.`,
-      evidence: requirement.sourceEvidence,
+      message: `Deadline is today (${assessment.original}) from ${sourceLabel}. End-of-day timing was not assumed.`,
+      evidence,
     });
     repos.insertIssue({
       id: newId(),
       applicationId,
-      requirementId: requirement.id,
+      requirementId,
       documentId: null,
       severity: "needs_confirmation",
       code: "DEADLINE_TODAY",
       title: "Deadline is today",
-      explanation: `The deadline (${assessment.original}) is today. ApplyReady did not assume a timezone or end-of-day cutoff.`,
-      evidence: requirement.sourceEvidence,
+      explanation: `The deadline (${assessment.original}) from ${sourceLabel} is today. ApplyReady did not assume a timezone or end-of-day cutoff.`,
+      evidence,
       recommendedFix:
         "Confirm the exact cutoff time from the official source before submitting.",
+      status: "open",
+      dismissible: true,
+    });
+    return assessment;
+  }
+
+  repos.insertValidation({
+    id: newId(),
+    applicationId,
+    requirementId,
+    documentId: null,
+    rule: "deadline",
+    passed: true,
+    severity: "suggestion",
+    message: `Deadline ${assessment.original} (${sourceLabel}) is in the future.`,
+    evidence,
+  });
+  return assessment;
+}
+
+function normalizeDeadlineKey(raw: string): string {
+  const assessment = assessDeadline(raw);
+  if (assessment.status === "ambiguous") return raw.trim().toLowerCase();
+  return assessment.comparable;
+}
+
+function validateDeadlineRequirement(
+  repos: Repositories,
+  params: {
+    applicationId: string;
+    requirement: Requirement;
+  },
+) {
+  const { applicationId, requirement } = params;
+  const raw = requirement.dateRequirement || "";
+  emitDeadlineAssessment(repos, {
+    applicationId,
+    requirementId: requirement.id,
+    raw,
+    evidence: requirement.sourceEvidence,
+    sourceLabel: "extracted requirement",
+  });
+}
+
+function assessApplicationDeadline(
+  repos: Repositories,
+  params: {
+    applicationId: string;
+    applicationDeadline: string | null;
+    requirements: Requirement[];
+  },
+) {
+  const { applicationId, applicationDeadline, requirements } = params;
+  if (!applicationDeadline || !applicationDeadline.trim()) return;
+
+  const extracted = requirements.filter(
+    (r) =>
+      r.dateRequirement &&
+      (r.category === "other" || Boolean(r.dateRequirement)),
+  );
+
+  if (extracted.length === 0) {
+    emitDeadlineAssessment(repos, {
+      applicationId,
+      requirementId: null,
+      raw: applicationDeadline,
+      evidence: applicationDeadline,
+      sourceLabel: "application deadline",
+    });
+    return;
+  }
+
+  // Reconcile with extracted deadlines — conflict if they clearly disagree.
+  let agreed = false;
+  let conflicted = false;
+  for (const req of extracted) {
+    const extractedRaw = req.dateRequirement!;
+    const appKey = normalizeDeadlineKey(applicationDeadline);
+    const extKey = normalizeDeadlineKey(extractedRaw);
+    const appAssess = assessDeadline(applicationDeadline);
+    const extAssess = assessDeadline(extractedRaw);
+
+    if (
+      appAssess.status !== "ambiguous" &&
+      extAssess.status !== "ambiguous" &&
+      appKey === extKey
+    ) {
+      agreed = true;
+      continue;
+    }
+
+    if (
+      appAssess.status !== "ambiguous" &&
+      extAssess.status !== "ambiguous" &&
+      appKey !== extKey
+    ) {
+      conflicted = true;
+    }
+  }
+
+  if (conflicted) {
+    repos.insertIssue({
+      id: newId(),
+      applicationId,
+      requirementId: extracted[0]?.id ?? null,
+      documentId: null,
+      severity: "needs_confirmation",
+      code: "DEADLINE_CONFLICT",
+      title: "Application deadline conflicts with extracted deadline",
+      explanation: `The application deadline (${applicationDeadline}) does not match the deadline extracted from requirements.`,
+      evidence: [
+        `application: ${applicationDeadline}`,
+        ...extracted.map((r) => `extracted: ${r.dateRequirement}`),
+      ].join(" | "),
+      recommendedFix:
+        "Confirm the official deadline and update the application and/or requirement so they agree.",
       status: "open",
       dismissible: true,
     });
     return;
   }
 
-  repos.insertValidation({
-    id: newId(),
+  if (agreed) {
+    // One logical check already emitted via extracted requirement validation.
+    return;
+  }
+
+  // Extracted existed but was ambiguous — still assess top-level as user input.
+  emitDeadlineAssessment(repos, {
     applicationId,
-    requirementId: requirement.id,
-    documentId: null,
-    rule: "deadline",
-    passed: true,
-    severity: "suggestion",
-    message: `Deadline ${assessment.original} is in the future.`,
-    evidence: requirement.sourceEvidence,
+    requirementId: null,
+    raw: applicationDeadline,
+    evidence: applicationDeadline,
+    sourceLabel: "application deadline",
   });
 }
 

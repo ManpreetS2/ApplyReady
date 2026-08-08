@@ -308,6 +308,15 @@ export function ApplicationDetailPage() {
                           ? "Required"
                           : "Optional"}{" "}
                       · {req.userConfirmed ? "Confirmed" : "Needs confirmation"}
+                      {req.conditional
+                        ? ` · ${
+                            req.applicability === "applicable"
+                              ? "Applies"
+                              : req.applicability === "not_applicable"
+                                ? "Does not apply"
+                                : "Applicability unknown"
+                          }`
+                        : ""}
                     </p>
                   </div>
                   {match ? (
@@ -384,6 +393,36 @@ export function ApplicationDetailPage() {
                     >
                       Confirm requirement
                     </button>
+                  ) : null}
+                  {!readOnly &&
+                  req.conditional &&
+                  req.applicability === "unknown" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={async () => {
+                          await api.confirmRequirement(req.id, {
+                            applicability: "applicable",
+                          });
+                          await load();
+                        }}
+                      >
+                        Applies to me
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={async () => {
+                          await api.confirmRequirement(req.id, {
+                            applicability: "not_applicable",
+                          });
+                          await load();
+                        }}
+                      >
+                        Does not apply
+                      </button>
+                    </>
                   ) : null}
                   {!readOnly && match && !match.userConfirmed ? (
                     <button
@@ -568,7 +607,7 @@ export function ApplicationDetailPage() {
                 </p>
               ) : null}
               <div className="flex flex-wrap gap-2">
-                {!readOnly && issue.status === "open" ? (
+                {!readOnly && issue.status === "open" && issue.dismissible ? (
                   <button
                     type="button"
                     className="btn-secondary"
@@ -591,6 +630,11 @@ export function ApplicationDetailPage() {
                   >
                     Dismiss
                   </button>
+                ) : null}
+                {!readOnly && issue.status === "open" && !issue.dismissible ? (
+                  <p className="text-sm text-ink-500">
+                    Fix the underlying document or requirement, then reanalyze.
+                  </p>
                 ) : null}
               </div>            </article>
           ))}
@@ -705,13 +749,15 @@ export function ApplicationDetailPage() {
                       await load();
                     }}
                   >
-                    Mark as real mismatch
+                    Confirm real mismatch
                   </button>
                 </div>
                 )
               ) : (
                 <p className="text-sm">
-                  Resolved · {conflict.equivalent ? "treated as equivalent" : "mismatch confirmed"}
+                  {conflict.equivalent
+                    ? "Marked equivalent — does not block readiness"
+                    : "Confirmed real mismatch — blocking until values are corrected"}
                 </p>
               )}
             </article>

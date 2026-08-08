@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS requirements (
   certainty TEXT NOT NULL DEFAULT 'required',
   conditional INTEGER NOT NULL DEFAULT 0,
   condition_text TEXT,
+  applicability TEXT NOT NULL DEFAULT 'applicable',
   source_type TEXT,
   source_name TEXT,
   source_url TEXT,
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS applicant_profiles (
   target_organization TEXT,
   currently_enrolled INTEGER,
   user_confirmed INTEGER NOT NULL DEFAULT 0,
+  confirmed_fields TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL
 );
 

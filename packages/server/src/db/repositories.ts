@@ -105,8 +105,8 @@ export class Repositories {
     this.db
       .prepare(
         `INSERT INTO applicant_profiles
-        (id, application_id, target_organization, user_confirmed, updated_at)
-        VALUES (?, ?, ?, 0, ?)`,
+        (id, application_id, target_organization, user_confirmed, confirmed_fields, updated_at)
+        VALUES (?, ?, ?, 0, '[]', ?)`,
       )
       .run(newId(), id, input.organization, now);
     this.addActivity(id, "application_created", `Created application ${input.name}`);
@@ -240,20 +240,23 @@ export class Repositories {
     const stmt = this.db.prepare(
       `INSERT INTO requirements (
         id, application_id, source_id, title, description, category, required, certainty, conditional,
-        condition_text, source_type, source_name, source_url, source_evidence, source_location,
+        condition_text, applicability, source_type, source_name, source_url, source_evidence, source_location,
         confidence, confidence_level, extraction_rule, user_confirmed, accepted_document_types,
         accepted_file_extensions, minimum_count, maximum_count, word_limit_minimum, word_limit_maximum,
         page_limit_minimum, page_limit_maximum, filename_pattern, signature_required, date_requirement,
         expiration_rule, required_keywords, organization_name_expected, custom_validation_notes,
         created_at, updated_at
       ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
       )`,
     );
 
     for (const draft of drafts) {
       const certainty = draft.certainty;
       const required = certainty === "required";
+      const applicability =
+        draft.applicability ??
+        (draft.conditional ? "unknown" : "applicable");
       stmt.run(
         newId(),
         applicationId,
@@ -265,6 +268,7 @@ export class Repositories {
         certainty,
         draft.conditional ? 1 : 0,
         draft.conditionText,
+        applicability,
         source.sourceType,
         source.sourceName,
         source.sourceUrl,
@@ -326,18 +330,21 @@ export class Repositories {
       input.certainty ??
       (input.required === false ? "optional" : "required");
     const required = certainty === "required";
+    const applicability =
+      input.applicability ??
+      (input.conditional ? "unknown" : "applicable");
     this.db
       .prepare(
         `INSERT INTO requirements (
           id, application_id, source_id, title, description, category, required, certainty, conditional,
-          condition_text, source_type, source_name, source_url, source_evidence, source_location,
+          condition_text, applicability, source_type, source_name, source_url, source_evidence, source_location,
           confidence, confidence_level, extraction_rule, user_confirmed, accepted_document_types,
           accepted_file_extensions, minimum_count, maximum_count, word_limit_minimum, word_limit_maximum,
           page_limit_minimum, page_limit_maximum, filename_pattern, signature_required, date_requirement,
           expiration_rule, required_keywords, organization_name_expected, custom_validation_notes,
           created_at, updated_at
         ) VALUES (
-          ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+          ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
         )`,
       )
       .run(
@@ -351,6 +358,7 @@ export class Repositories {
         certainty,
         (input.conditional ?? false) ? 1 : 0,
         input.conditionText ?? null,
+        applicability,
         "pasted_text",
         "Manual entry",
         null,
@@ -400,6 +408,7 @@ export class Repositories {
       .prepare(
         `UPDATE requirements SET
           title=?, description=?, category=?, required=?, certainty=?, conditional=?, condition_text=?,
+          applicability=?,
           source_evidence=?, source_location=?, confidence=?, confidence_level=?, user_confirmed=?,
           accepted_document_types=?, accepted_file_extensions=?, minimum_count=?, maximum_count=?,
           word_limit_minimum=?, word_limit_maximum=?, page_limit_minimum=?, page_limit_maximum=?,
@@ -415,6 +424,7 @@ export class Repositories {
         next.certainty,
         next.conditional ? 1 : 0,
         next.conditionText,
+        next.applicability,
         next.sourceEvidence,
         next.sourceLocation,
         next.confidence,
@@ -621,10 +631,10 @@ export class Repositories {
         "DELETE FROM issues WHERE application_id=? AND status='open'",
       )
       .run(applicationId);
+    // Conflicts are fully rebuilt during analysis; prior decisions are
+    // reapplied only for fingerprints that remain active.
     this.db
-      .prepare(
-        "DELETE FROM profile_conflicts WHERE application_id=? AND resolved=0",
-      )
+      .prepare("DELETE FROM profile_conflicts WHERE application_id=?")
       .run(applicationId);
   }
 
@@ -791,13 +801,70 @@ export class Repositories {
   ): ApplicantProfile {
     const current = this.getProfile(applicationId);
     if (!current) throw new Error("Profile not found");
+
+    const CONFIRMABLE = [
+      "fullLegalName",
+      "email",
+      "phone",
+      "school",
+      "major",
+      "gpa",
+      "expectedGraduationDate",
+      "targetOrganization",
+      "currentlyEnrolled",
+    ] as const;
+
     const next = { ...current, ...patch, updatedAt: nowIso() };
+    let confirmedFields = [...current.confirmedFields];
+
+    // Changing a previously confirmed value invalidates that field unless
+    // this request explicitly reconfirms it (via confirmedFields or Save).
+    for (const field of CONFIRMABLE) {
+      if (!(field in patch) || patch[field] === undefined) continue;
+      const oldVal = current[field];
+      const newVal = patch[field];
+      const changed =
+        field === "currentlyEnrolled"
+          ? oldVal !== newVal
+          : String(oldVal ?? "") !== String(newVal ?? "");
+      if (changed && confirmedFields.includes(field)) {
+        const explicitlyKept =
+          Array.isArray(patch.confirmedFields) &&
+          patch.confirmedFields.includes(field);
+        const savingConfirmsAll = patch.userConfirmed === true;
+        if (!explicitlyKept && !savingConfirmsAll) {
+          confirmedFields = confirmedFields.filter((f) => f !== field);
+        }
+      }
+    }
+
+    if (Array.isArray(patch.confirmedFields)) {
+      confirmedFields = [...patch.confirmedFields];
+    } else if (patch.userConfirmed === true) {
+      // Save Profile: confirm fields that have an explicit reviewed value.
+      for (const field of CONFIRMABLE) {
+        const val = next[field];
+        const hasValue =
+          field === "currentlyEnrolled"
+            ? val === true || val === false
+            : val != null && String(val).trim() !== "";
+        if (hasValue && !confirmedFields.includes(field)) {
+          confirmedFields.push(field);
+        }
+      }
+    }
+
+    next.confirmedFields = confirmedFields;
+    if (confirmedFields.length > 0) {
+      next.userConfirmed = true;
+    }
+
     this.db
       .prepare(
         `UPDATE applicant_profiles SET
           full_legal_name=?, preferred_name=?, email=?, phone=?, school=?,
           expected_graduation_date=?, major=?, gpa=?, address=?, target_organization=?,
-          currently_enrolled=?, user_confirmed=?, updated_at=?
+          currently_enrolled=?, user_confirmed=?, confirmed_fields=?, updated_at=?
          WHERE application_id=?`,
       )
       .run(
@@ -817,6 +884,7 @@ export class Repositories {
             ? 1
             : 0,
         next.userConfirmed ? 1 : 0,
+        JSON.stringify(next.confirmedFields),
         next.updatedAt,
         applicationId,
       );

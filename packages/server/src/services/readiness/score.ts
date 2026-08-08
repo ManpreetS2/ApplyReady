@@ -16,6 +16,7 @@ const ELIGIBILITY_ISSUE_CODES = new Set([
   "DEADLINE_EXPIRED",
   "DEADLINE_AMBIGUOUS",
   "DEADLINE_TODAY",
+  "DEADLINE_CONFLICT",
   "ELIGIBILITY_UNRESOLVED",
 ]);
 
@@ -30,9 +31,28 @@ function isDocumentRequirement(r: Requirement): boolean {
 function isEligibilityOrDeadlineRequirement(r: Requirement): boolean {
   return (
     r.required &&
+    r.applicability !== "not_applicable" &&
     (r.category === "proof_of_eligibility" ||
       r.category === "proof_of_enrollment" ||
       (r.category === "other" && Boolean(r.dateRequirement)))
+  );
+}
+
+/** Active conflict that still needs a user decision. */
+function needsConflictConfirmation(c: ProfileConflict): boolean {
+  return c.equivalent == null;
+}
+
+/** Active conflict the user confirmed as a real mismatch — blocking. */
+function isConfirmedMismatch(c: ProfileConflict): boolean {
+  return c.equivalent === false;
+}
+
+function isSatisfyingMatch(match: DocumentMatch): boolean {
+  return (
+    match.userConfirmed ||
+    match.status === "confirmed" ||
+    (match.status === "likely" && match.confidence >= 0.8)
   );
 }
 
@@ -44,13 +64,22 @@ export function computeReadiness(params: {
   conflicts: ProfileConflict[];
 }): ReadinessReport {
   const { applicationId, requirements, matches, issues, conflicts } = params;
+  // Exclude not-applicable conditionals from required coverage.
   const required = requirements.filter(
-    (r) => r.required && isDocumentRequirement(r),
+    (r) =>
+      r.required &&
+      r.applicability !== "not_applicable" &&
+      isDocumentRequirement(r),
   );
   const openIssues = issues.filter((i) => i.status === "open");
   const blocking = openIssues.filter((i) => i.severity === "blocking");
   const warnings = openIssues.filter((i) => i.severity === "warning");
-  const unresolvedConflicts = conflicts.filter((c) => !c.resolved);
+  const openNeedsConfirmation = openIssues.filter(
+    (i) => i.severity === "needs_confirmation",
+  );
+  const activeConflicts = conflicts; // analysis keeps only active fingerprints
+  const unresolvedConflicts = activeConflicts.filter(needsConflictConfirmation);
+  const confirmedMismatchConflicts = activeConflicts.filter(isConfirmedMismatch);
   const uncertainRequirementIssues = openIssues.filter(
     (i) => i.code === "UNCERTAIN_REQUIREMENT",
   );
@@ -63,13 +92,12 @@ export function computeReadiness(params: {
     isEligibilityOrDeadlineRequirement,
   );
 
-  const bestByRequirement = new Map<string, DocumentMatch>();
+  const matchesByRequirement = new Map<string, DocumentMatch[]>();
   for (const match of matches) {
     if (match.status === "does_not_match") continue;
-    const existing = bestByRequirement.get(match.requirementId);
-    if (!existing || match.confidence > existing.confidence) {
-      bestByRequirement.set(match.requirementId, match);
-    }
+    const list = matchesByRequirement.get(match.requirementId) || [];
+    list.push(match);
+    matchesByRequirement.set(match.requirementId, list);
   }
 
   let requiredPresent = 0;
@@ -78,22 +106,23 @@ export function computeReadiness(params: {
   let uncertainRequirements = 0;
 
   for (const req of required) {
-    const match = bestByRequirement.get(req.id);
-    if (!match) {
-      uncertainRequirements += 1;
-      continue;
-    }
-    if (
-      match.userConfirmed ||
-      match.status === "confirmed" ||
-      (match.status === "likely" && match.confidence >= 0.8)
-    ) {
+    const reqMatches = matchesByRequirement.get(req.id) || [];
+    const satisfying = reqMatches.filter(isSatisfyingMatch);
+    // Distinct documents only
+    const distinctDocs = new Set(satisfying.map((m) => m.documentId));
+    const minCount = Math.max(1, req.minimumCount || 1);
+    if (distinctDocs.size >= minCount) {
       requiredPresent += 1;
-      if (match.userConfirmed || match.status === "confirmed") confirmedMatches += 1;
+      const confirmed = satisfying.filter(
+        (m) => m.userConfirmed || m.status === "confirmed",
+      );
+      if (confirmed.length >= minCount) confirmedMatches += 1;
       else likelyMatches += 1;
     } else if (
-      match.status === "needs_confirmation" ||
-      match.status === "possible"
+      reqMatches.some(
+        (m) =>
+          m.status === "needs_confirmation" || m.status === "possible",
+      )
     ) {
       uncertainRequirements += 1;
     } else {
@@ -114,13 +143,15 @@ export function computeReadiness(params: {
   const uncertaintyPenalty = Math.min(
     0.3,
     uncertainRequirements * 0.06 +
+      openNeedsConfirmation.length * 0.04 +
+      unresolvedConflicts.length * 0.03 +
       requirements.filter((r) => !r.userConfirmed && r.confidence < 0.6).length *
         0.02,
   );
   const conflictPenalty = Math.min(
     0.2,
-    unresolvedConflicts.filter((c) => c.equivalent === false).length * 0.1 +
-      unresolvedConflicts.filter((c) => c.equivalent == null).length * 0.03,
+    confirmedMismatchConflicts.length * 0.1 +
+      unresolvedConflicts.length * 0.03,
   );
   const eligibilityPenalty = Math.min(0.35, eligibilityUnresolved.length * 0.12);
 
@@ -153,7 +184,7 @@ export function computeReadiness(params: {
       label: "Consistency",
       weight: 5,
       score: Math.round((1 - conflictPenalty) * 5),
-      note: `${unresolvedConflicts.length} unresolved conflict(s)`,
+      note: `${unresolvedConflicts.length} unresolved, ${confirmedMismatchConflicts.length} confirmed mismatch(es)`,
     },
   ];
 
@@ -164,32 +195,34 @@ export function computeReadiness(params: {
   score = Math.max(0, Math.min(100, score));
 
   const missingRequiredDocs = required.some((req) => {
-    const match = bestByRequirement.get(req.id);
-    return (
-      !match ||
-      !(
-        match.userConfirmed ||
-        match.status === "confirmed" ||
-        (match.status === "likely" && match.confidence >= 0.8)
-      )
+    const reqMatches = matchesByRequirement.get(req.id) || [];
+    const distinctDocs = new Set(
+      reqMatches.filter(isSatisfyingMatch).map((m) => m.documentId),
     );
+    return distinctDocs.size < Math.max(1, req.minimumCount || 1);
   });
 
   const hardBlock =
     blocking.length > 0 ||
     missingRequiredDocs ||
-    unresolvedConflicts.some((c) => c.equivalent === false) ||
+    confirmedMismatchConflicts.length > 0 ||
     eligibilityUnresolved.some((i) => i.severity === "blocking");
+
+  // ANY open needs_confirmation issue prevents Ready (not only eligibility/uncertain).
+  const hasOpenNeedsConfirmation = openNeedsConfirmation.length > 0;
+  const hasUnresolvedConflicts = unresolvedConflicts.length > 0;
 
   const preventsReady =
     hardBlock ||
+    hasOpenNeedsConfirmation ||
+    hasUnresolvedConflicts ||
     eligibilityUnresolved.length > 0 ||
     uncertainRequirementIssues.length > 0;
 
   /**
    * Status ordering:
    * 1. Known hard failures (including eligibility/deadline) win over "no documents".
-   * 2. Unresolved eligibility / uncertain requirements → needs_attention.
+   * 2. Unresolved eligibility / needs_confirmation / uncertain requirements → needs_attention.
    * 3. Eligibility-only apps with all checks passing → ready (documented).
    * 4. Empty apps with nothing to evaluate → unable_to_determine.
    */
@@ -198,19 +231,19 @@ export function computeReadiness(params: {
     status = "not_ready";
     score = Math.min(score, 54);
   } else if (
+    hasOpenNeedsConfirmation ||
+    hasUnresolvedConflicts ||
     eligibilityUnresolved.length > 0 ||
     uncertainRequirementIssues.length > 0
   ) {
     status = "needs_attention";
   } else if (required.length === 0 && matches.length === 0) {
     if (hasEligibilityOrDeadline) {
-      // Required eligibility/deadline checks exist and none are unresolved/failed.
       status = "ready";
     } else if (requirements.length === 0) {
       status = "unable_to_determine";
       score = Math.min(score, 40);
     } else {
-      // Only optional/uncertain non-eligibility items with no matches.
       status = "unable_to_determine";
       score = Math.min(score, 40);
     }
@@ -225,14 +258,16 @@ export function computeReadiness(params: {
   }
 
   if (hardBlock && status === "ready") status = "not_ready";
-  if (preventsReady && status === "ready") {
+  if (preventsReady && (status === "ready" || status === "nearly_ready")) {
     status = hardBlock ? "not_ready" : "needs_attention";
   }
   if (
     status === "ready" &&
     (blocking.length > 0 ||
       requiredPresent < required.length ||
-      unresolvedConflicts.some((c) => c.equivalent === false) ||
+      confirmedMismatchConflicts.length > 0 ||
+      hasOpenNeedsConfirmation ||
+      hasUnresolvedConflicts ||
       eligibilityUnresolved.length > 0 ||
       uncertainRequirementIssues.length > 0)
   ) {
@@ -253,7 +288,8 @@ export function computeReadiness(params: {
       blockingIssues: blocking.length,
       warnings: warnings.length,
       uncertainRequirements,
-      consistencyConflicts: unresolvedConflicts.length,
+      consistencyConflicts:
+        unresolvedConflicts.length + confirmedMismatchConflicts.length,
       factors,
     },
     generatedAt: new Date().toISOString(),

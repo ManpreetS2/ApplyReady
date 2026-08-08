@@ -56,6 +56,28 @@ export type ConfidenceLevel = "high" | "medium" | "low";
 /** Evidence-backed obligation strength for an extracted requirement. */
 export type RequirementCertainty = "required" | "optional" | "uncertain";
 
+/**
+ * Whether a conditional requirement applies to this applicant.
+ * Unconditional requirements are always "applicable".
+ * Newly extracted conditional requirements start as "unknown".
+ */
+export type RequirementApplicability =
+  | "applicable"
+  | "not_applicable"
+  | "unknown";
+
+/** Profile fields that can be independently confirmed by the user. */
+export type ProfileConfirmableField =
+  | "fullLegalName"
+  | "email"
+  | "phone"
+  | "school"
+  | "major"
+  | "gpa"
+  | "expectedGraduationDate"
+  | "targetOrganization"
+  | "currentlyEnrolled";
+
 export interface Application {
   id: string;
   name: string;
@@ -98,6 +120,11 @@ export interface Requirement {
   certainty: RequirementCertainty;
   conditional: boolean;
   conditionText: string | null;
+  /**
+   * Conditional applicability. Unconditional requirements are always applicable.
+   * unknown produces needs_confirmation and prevents Ready.
+   */
+  applicability: RequirementApplicability;
   sourceType: SourceType | null;
   sourceName: string | null;
   sourceUrl: string | null;
@@ -214,7 +241,13 @@ export interface ApplicantProfile {
   targetOrganization: string | null;
   /** Explicit user confirmation of current enrollment; school/grad date alone is insufficient. */
   currentlyEnrolled: boolean | null;
+  /**
+   * Legacy global flag retained for compatibility.
+   * Readiness must not trust newly auto-populated fields via this flag alone.
+   */
   userConfirmed: boolean;
+  /** Per-field confirmation — auto-population never adds entries here. */
+  confirmedFields: ProfileConfirmableField[];
   updatedAt: string;
 }
 

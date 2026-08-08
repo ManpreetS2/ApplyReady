@@ -96,6 +96,7 @@ export interface ExtractedRequirementDraft {
   certainty: "required" | "optional" | "uncertain";
   conditional: boolean;
   conditionText: string | null;
+  applicability?: "applicable" | "not_applicable" | "unknown";
   sourceEvidence: string;
   sourceLocation: string | null;
   confidence: number;
