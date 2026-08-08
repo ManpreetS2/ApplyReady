@@ -142,7 +142,10 @@ export function createApp(db: Database.Database) {
     standardHeaders: true,
     legacyHeaders: false,
     handler: rateLimitHandler,
-    skip: () => shouldSkipRateLimit(),
+    skip: (req) =>
+      shouldSkipRateLimit() ||
+      (req.method === "GET" &&
+        (req.path === "/health" || req.path === "/config")),
   });
 
   const demoStartLimiter = rateLimit({

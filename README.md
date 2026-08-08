@@ -248,7 +248,9 @@ Docker public demo: see [docs/PUBLIC_DEMO_DEPLOYMENT.md](docs/PUBLIC_DEMO_DEPLOY
 - Physical-device testing is out of scope unless separately performed
 - Hosted public demo disables real uploads; it is not equivalent to full local mode
 - Independent concurrent demos use unpredictable IDs without accounts; not authenticated private sessions or multi-user SaaS
-- **Supported checks** focus on explicit application/document requirements: formats, counts, word/page limits, filenames, GPA, enrollment evidence, deadlines, and consistency conflicts
+- **Supported checks** focus on explicit application/document requirements: formats, counts (distinct documents), word/page limits (min/max/exact/range), filenames, GPA, enrollment evidence (explicit document text or confirmed profile field), deadlines (application + extracted, with cutoff-time preservation), conditional applicability, and consistency conflicts
+- Confirmed real value mismatches remain blocking until underlying documents/profile values change; equivalent values do not block
+- Any open `needs_confirmation` issue prevents Ready
 - **Not yet** a full ATS qualification engine: no broad resume-vs-job skill matching, automatic job discovery, complex work-authorization qualification, or arbitrary natural-language eligibility reasoning
 - Does not market or implement job-board scraping or anti-bot circumvention
 
