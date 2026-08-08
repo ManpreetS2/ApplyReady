@@ -13,6 +13,7 @@ function req(partial: Partial<Requirement> & Pick<Requirement, "id" | "category"
     certainty: "required",
     conditional: false,
     conditionText: null,
+    applicability: "applicable",
     sourceType: "pasted_text",
     sourceName: "t",
     sourceUrl: null,

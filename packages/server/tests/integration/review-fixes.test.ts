@@ -22,6 +22,7 @@ function baseReq(partial: Partial<Requirement>): Requirement {
     certainty: partial.certainty || "uncertain",
     conditional: false,
     conditionText: null,
+    applicability: "applicable",
     sourceType: "pasted_text",
     sourceName: "t",
     sourceUrl: null,
