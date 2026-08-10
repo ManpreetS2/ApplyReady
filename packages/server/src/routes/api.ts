@@ -10,6 +10,7 @@ import {
   mergeRequirementsSchema,
   pastedSourceSchema,
   resolveConflictSchema,
+  applyDemoFixSchema,
   setDemoStepSchema,
   updateApplicationSchema,
   updateIssueSchema,
@@ -51,6 +52,7 @@ import {
   setGuidedDemoStep,
   startGuidedDemo,
 } from "../services/demo/demo.js";
+import { getDemoFixPreview } from "../services/demo/preview.js";
 import { computeReadiness } from "../services/readiness/score.js";
 
 const upload = multer({
@@ -695,8 +697,20 @@ export function createApiRouter(db: Database.Database): Router {
   router.post(
     "/demo/:id/fix",
     asyncHandler(async (req, res) => {
-      const result = await applySuggestedDemoFix(db, req.params.id!);
+      const body =
+        req.body && Object.keys(req.body).length > 0
+          ? applyDemoFixSchema.parse(req.body)
+          : ({ mode: "suggested" } as const);
+      const result = await applySuggestedDemoFix(db, req.params.id!, body);
       res.json({ ...result, steps: DEMO_STEPS });
+    }),
+  );
+
+  router.get(
+    "/demo/:id/fix-preview",
+    asyncHandler(async (req, res) => {
+      const preview = getDemoFixPreview(db, req.params.id!);
+      res.json({ preview });
     }),
   );
 

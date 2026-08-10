@@ -17,6 +17,18 @@ Applicants must submit the following materials:
 Optional: portfolio samples may be submitted.
 `.trim();
 
+export const DEMO_SUGGESTED = {
+  scholarshipReference: "Future Engineers Scholarship",
+  organization: "Future Engineers Scholarship",
+  email: "alex.chen@example.com",
+  filename: "Chen_Alex_2026.pdf",
+  badScholarshipReference: "Horizon Innovators Scholarship",
+  badOrganization: "Horizon Innovators Scholarship",
+  badEmail: "alex.old.email@example.com",
+  badFilename: "final_packet_submission.pdf",
+  transcriptFilename: "Unofficial_Transcript.pdf",
+} as const;
+
 const ESSAY_PARAGRAPHS = [
   "I am applying because engineering has shaped how I solve problems and serve my community. From tutoring classmates in physics to building small automation scripts for campus clubs, I have learned that thoughtful design can remove friction for real people. This essay explains why I want to continue that path through the Horizon Innovators Scholarship and how mentorship, coursework, and hands-on projects prepared me for the next step.",
   "Growing up, I treated broken things as puzzles. When our community center sign-up process collapsed under spreadsheets, I helped redesign a simple workflow that reduced wait times. That experience taught me that technical work is never only technical. It is communication, empathy, and iteration. At De Anza College I deepened those lessons through computer science coursework, collaborative labs, and late-night debugging sessions that demanded both rigor and humility.",
@@ -39,10 +51,33 @@ function padToWordCount(text: string, target: number): string {
   return out;
 }
 
-export async function buildDemoResumePdf(outdatedEmail = true): Promise<Buffer> {
-  const email = outdatedEmail
-    ? "alex.old.email@example.com"
-    : "alex.chen@example.com";
+function asOptions<T extends Record<string, unknown>>(
+  input: boolean | T | undefined,
+  badKey: keyof T,
+  defaultBad: boolean,
+): T {
+  if (typeof input === "boolean") {
+    return { [badKey]: input } as T;
+  }
+  if (input && typeof input === "object") {
+    return input;
+  }
+  return { [badKey]: defaultBad } as T;
+}
+
+export type DemoResumeOptions = {
+  useBadVersion?: boolean;
+  emailOverride?: string;
+};
+
+export async function buildDemoResumePdf(
+  options: boolean | DemoResumeOptions = true,
+): Promise<Buffer> {
+  const opts = asOptions<DemoResumeOptions>(options, "useBadVersion", true);
+  const useBad = opts.useBadVersion !== false;
+  const email =
+    opts.emailOverride?.trim() ||
+    (useBad ? DEMO_SUGGESTED.badEmail : DEMO_SUGGESTED.email);
   return buildSimplePdf([
     "Alex Chen",
     email,
@@ -67,29 +102,49 @@ export async function buildDemoResumePdf(outdatedEmail = true): Promise<Buffer> 
   ]);
 }
 
-export async function buildDemoEssayPdf(overLimit = true): Promise<Buffer> {
+export type DemoEssayOptions = {
+  useBadVersion?: boolean;
+  scholarshipReferenceOverride?: string;
+};
+
+export async function buildDemoEssayPdf(
+  options: boolean | DemoEssayOptions = true,
+): Promise<Buffer> {
+  const opts = asOptions<DemoEssayOptions>(options, "useBadVersion", true);
+  const hasOverride = Boolean(opts.scholarshipReferenceOverride?.trim());
+  const useBad = opts.useBadVersion !== false && !hasOverride;
   const joined = ESSAY_PARAGRAPHS.join(" ");
-  const text = overLimit
-    ? padToWordCount(`${joined} ${joined}`, 620)
-    : padToWordCount(
-        joined.replace(
-          /Horizon Innovators Scholarship/g,
-          "Future Engineers Scholarship",
-        ),
-        420,
-      )
+  const reference =
+    opts.scholarshipReferenceOverride?.trim() ||
+    (useBad
+      ? DEMO_SUGGESTED.badScholarshipReference
+      : DEMO_SUGGESTED.scholarshipReference);
+  const withReference = joined.replace(
+    /Horizon Innovators Scholarship/g,
+    reference,
+  );
+  const text = useBad
+    ? padToWordCount(`${withReference} ${withReference}`, 620)
+    : padToWordCount(withReference, 420)
         .split(/\s+/)
         .slice(0, 480)
         .join(" ");
   return buildSimplePdf(["Essay", ...wrapWords(text, 85)]);
 }
 
+export type DemoRecommendationOptions = {
+  useBadVersion?: boolean;
+  organizationOverride?: string;
+};
+
 export async function buildDemoRecommendationPdf(
-  wrongOrg = true,
+  options: boolean | DemoRecommendationOptions = true,
 ): Promise<Buffer> {
-  const org = wrongOrg
-    ? "Horizon Innovators Scholarship"
-    : "Future Engineers Scholarship";
+  const opts = asOptions<DemoRecommendationOptions>(options, "useBadVersion", true);
+  const useBad = opts.useBadVersion !== false;
+  const org =
+    opts.organizationOverride?.trim() ||
+    (useBad ? DEMO_SUGGESTED.badOrganization : DEMO_SUGGESTED.organization);
   return buildSimplePdf([
     "Letter of Recommendation",
     `Dear ${org} Committee,`,
@@ -111,7 +166,7 @@ export async function buildDemoTranscriptPdf(): Promise<Buffer> {
     "School: De Anza College",
     "Major: Computer Science",
     "GPA: 3.75",
-    "Email: alex.chen@example.com",
+    `Email: ${DEMO_SUGGESTED.email}`,
     "",
     "Course                Grade  Credits",
     "Intro to Programming    A      4",
@@ -121,13 +176,29 @@ export async function buildDemoTranscriptPdf(): Promise<Buffer> {
   ]);
 }
 
-export async function buildDemoPacketPdf(correctName = false): Promise<{
+export type DemoPacketOptions = {
+  /** When true, use the intentional bad filename (legacy boolean false). */
+  useBadVersion?: boolean;
+  filenameOverride?: string;
+};
+
+export async function buildDemoPacketPdf(
+  options: boolean | DemoPacketOptions = false,
+): Promise<{
   filename: string;
   buffer: Buffer;
 }> {
-  const filename = correctName
-    ? "Chen_Alex_2026.pdf"
-    : "final_packet_submission.pdf";
+  let filename: string;
+  if (typeof options === "boolean") {
+    // Legacy: true = correct name, false = bad name.
+    filename = options ? DEMO_SUGGESTED.filename : DEMO_SUGGESTED.badFilename;
+  } else {
+    filename =
+      options.filenameOverride?.trim() ||
+      (options.useBadVersion
+        ? DEMO_SUGGESTED.badFilename
+        : DEMO_SUGGESTED.filename);
+  }
   const buffer = await buildSimplePdf([
     "Combined Application Packet",
     "Future Engineers Scholarship",
@@ -140,6 +211,5 @@ export async function buildDemoPacketPdf(correctName = false): Promise<{
 }
 
 export async function buildImageOnlyPdf(): Promise<Buffer> {
-  // Nearly blank PDF — treated as little/no extractable text by the reader.
   return buildSimplePdf([" ", " ", " "]);
 }

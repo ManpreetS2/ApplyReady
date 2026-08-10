@@ -19,6 +19,9 @@ import {
   buildDemoTranscriptPdf,
 } from "./content.js";
 import { withDemoLock } from "./lock.js";
+import { DEMO_STEPS, type DemoStepInfo } from "./steps.js";
+
+export { DEMO_STEPS, type DemoStepInfo } from "./steps.js";
 
 /** Test-only: force a failure during staged demo reset initialization. */
 let resetFailAfter: "ingest" | "seed" | "analyze" | "before_swap" | null = null;
@@ -59,70 +62,6 @@ export function setDemoStepTestHooks(
   }
   stepFailAfter = hooks?.failAfter ?? null;
 }
-
-/**
- * Each entry describes the CURRENT application state after reaching that step.
- * `nextAction` describes the mutation Apply suggested fix will perform next.
- */
-export const DEMO_STEPS = [
-  {
-    step: 0,
-    title: "Initial packet review",
-    summary:
-      "The fictional packet starts with several intentional problems.",
-    nextAction: "Add fictional transcript",
-    shortLabel: "Review",
-  },
-  {
-    step: 1,
-    title: "Transcript added",
-    summary:
-      "The required fictional transcript is now present. The essay is still too long and references the wrong scholarship.",
-    nextAction: "Fix essay length and scholarship reference",
-    shortLabel: "Transcript",
-  },
-  {
-    step: 2,
-    title: "Essay corrected",
-    summary:
-      "The essay now meets the word limit and references Future Engineers Scholarship. The recommendation still addresses the wrong organization.",
-    nextAction: "Fix recommendation letter",
-    shortLabel: "Essay",
-  },
-  {
-    step: 3,
-    title: "Recommendation corrected",
-    summary:
-      "The recommendation now addresses Future Engineers Scholarship. The resume still contains the outdated email.",
-    nextAction: "Update resume email",
-    shortLabel: "Recommendation",
-  },
-  {
-    step: 4,
-    title: "Resume corrected",
-    summary:
-      "The fictional resume now uses the current email. The combined packet filename still needs correction.",
-    nextAction: "Fix combined packet filename",
-    shortLabel: "Resume",
-  },
-  {
-    step: 5,
-    title: "Packet filename corrected",
-    summary:
-      "The required files and filename are now corrected. Final matching and readiness confirmation remain.",
-    nextAction: "Finalize readiness",
-    shortLabel: "Packet",
-  },
-  {
-    step: 6,
-    title: "Ready to submit",
-    summary: "All required fictional items are verified.",
-    nextAction: null,
-    shortLabel: "Ready",
-  },
-] as const;
-
-export type DemoStepInfo = (typeof DEMO_STEPS)[number];
 
 async function confirmExtractedRequirements(
   repos: Repositories,
@@ -303,6 +242,13 @@ async function confirmLikelyMatches(db: Database.Database, applicationId: string
   }
 }
 
+type DemoTransitionOverrides = {
+  scholarshipReferenceOverride?: string;
+  organizationOverride?: string;
+  emailOverride?: string;
+  filenameOverride?: string;
+};
+
 /**
  * Shared demo mutation for reaching `nextStep` from `nextStep - 1`.
  * Does not update demoStep — callers set that after success.
@@ -311,6 +257,7 @@ async function applyDemoTransition(
   db: Database.Database,
   applicationId: string,
   nextStep: number,
+  overrides: DemoTransitionOverrides = {},
 ) {
   const repos = new Repositories(db);
 
@@ -328,7 +275,10 @@ async function applyDemoTransition(
     await replaceCategoryDoc(db, applicationId, "essay", async (targetId) => {
       await processUploadedDocument(db, {
         applicationId: targetId,
-        buffer: await buildDemoEssayPdf(false),
+        buffer: await buildDemoEssayPdf({
+          useBadVersion: false,
+          scholarshipReferenceOverride: overrides.scholarshipReferenceOverride,
+        }),
         originalFilename: "Essay_Alex_Chen.pdf",
         mimeType: "application/pdf",
         categoryHint: "essay",
@@ -340,7 +290,10 @@ async function applyDemoTransition(
     await replaceCategoryDoc(db, applicationId, "recommendation", async (targetId) => {
       await processUploadedDocument(db, {
         applicationId: targetId,
-        buffer: await buildDemoRecommendationPdf(false),
+        buffer: await buildDemoRecommendationPdf({
+          useBadVersion: false,
+          organizationOverride: overrides.organizationOverride,
+        }),
         originalFilename: "Recommendation_Letter.pdf",
         mimeType: "application/pdf",
         categoryHint: "recommendation",
@@ -352,7 +305,10 @@ async function applyDemoTransition(
     await replaceCategoryDoc(db, applicationId, "resume", async (targetId) => {
       await processUploadedDocument(db, {
         applicationId: targetId,
-        buffer: await buildDemoResumePdf(false),
+        buffer: await buildDemoResumePdf({
+          useBadVersion: false,
+          emailOverride: overrides.emailOverride,
+        }),
         originalFilename: "Alex_Chen_Resume.pdf",
         mimeType: "application/pdf",
         categoryHint: "resume",
@@ -362,7 +318,10 @@ async function applyDemoTransition(
 
   if (nextStep === 5) {
     await replaceCategoryDoc(db, applicationId, "combined_packet", async (targetId) => {
-      const packet = await buildDemoPacketPdf(true);
+      const packet = await buildDemoPacketPdf({
+        useBadVersion: false,
+        filenameOverride: overrides.filenameOverride,
+      });
       await processUploadedDocument(db, {
         applicationId: targetId,
         buffer: packet.buffer,
@@ -375,7 +334,8 @@ async function applyDemoTransition(
 
   let analysis = analyzeApplication(db, applicationId);
 
-  if (nextStep >= 5) {
+  // Final match confirmation + readiness only on the last guided transition.
+  if (nextStep === 6) {
     await confirmLikelyMatches(db, applicationId);
     for (const issue of repos.listIssues(applicationId)) {
       if (
@@ -796,7 +756,15 @@ export async function setGuidedDemoStep(
       };
     }
 
-    // Forward jumps must still rebuild from scratch so state stays deterministic.
+    if (targetStep > current) {
+      throw new AppError(
+        "DEMO_FORWARD_SKIP_NOT_ALLOWED",
+        "Future demo steps must be reached by applying the suggested fixes.",
+        409,
+        ["Use Review fix / Apply suggested fix to move forward one step at a time."],
+      );
+    }
+
     return materializeGuidedDemoStep(db, applicationId, targetStep, {
       type: "demo_step_set",
       message: `Guided demo moved to step ${targetStep}: ${DEMO_STEPS[targetStep]?.title ?? ""}`,
@@ -804,9 +772,279 @@ export async function setGuidedDemoStep(
   });
 }
 
+function rejectControlChars(value: string): void {
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value)) {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "Custom demo values cannot include control characters.",
+      400,
+    );
+  }
+}
+
+function sanitizeCustomDemoValue(
+  currentStep: number,
+  raw: string,
+): { field: "scholarship_reference" | "organization" | "email" | "filename"; value: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new AppError("VALIDATION_ERROR", "Custom value is required.", 400);
+  }
+  rejectControlChars(trimmed);
+
+  if (currentStep === 1) {
+    if (trimmed.length > 150) {
+      throw new AppError("VALIDATION_ERROR", "Scholarship reference is too long.", 400);
+    }
+    return { field: "scholarship_reference", value: trimmed };
+  }
+  if (currentStep === 2) {
+    if (trimmed.length > 150) {
+      throw new AppError("VALIDATION_ERROR", "Organization name is too long.", 400);
+    }
+    return { field: "organization", value: trimmed };
+  }
+  if (currentStep === 3) {
+    if (trimmed.length > 254) {
+      throw new AppError("VALIDATION_ERROR", "Email is too long.", 400);
+    }
+    return { field: "email", value: trimmed };
+  }
+  if (currentStep === 4) {
+    if (trimmed.length > 120) {
+      throw new AppError("VALIDATION_ERROR", "Filename is too long.", 400);
+    }
+    if (/[\\/]/.test(trimmed) || trimmed.includes("..") || trimmed.includes("\0")) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Filename must be a plain basename without path separators.",
+        400,
+      );
+    }
+    const basename = trimmed.split(/[\\/]/).pop() || trimmed;
+    return { field: "filename", value: basename };
+  }
+  throw new AppError(
+    "VALIDATION_ERROR",
+    "This guided step does not accept a custom text value.",
+    400,
+  );
+}
+
+function extractAppliedValue(
+  db: Database.Database,
+  applicationId: string,
+  field: "scholarship_reference" | "organization" | "email" | "filename" | null,
+): string | null {
+  if (!field) return null;
+  const repos = new Repositories(db);
+  const docs = repos.listDocuments(applicationId);
+  if (field === "filename") {
+    return docs.find((d) => d.category === "combined_packet")?.originalFilename ?? null;
+  }
+  if (field === "email") {
+    const resume = docs.find((d) => d.category === "resume");
+    if (!resume) return null;
+    const text = repos.getDocumentText(resume.id) || "";
+    return text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? null;
+  }
+  if (field === "organization") {
+    const rec = docs.find((d) => d.category === "recommendation");
+    if (!rec) return null;
+    const text = repos.getDocumentText(rec.id) || "";
+    return text.match(/Dear\s+(.+?)\s+Committee/i)?.[1]?.trim() ?? null;
+  }
+  if (field === "scholarship_reference") {
+    const essay = docs.find((d) => d.category === "essay");
+    if (!essay) return null;
+    const text = repos.getDocumentText(essay.id) || "";
+    const contextual = text.match(/through the (.+?) and how mentorship/i)?.[1]?.trim();
+    if (contextual) return contextual;
+    return (
+      text.match(
+        /\b((?:Horizon Innovators|Future Engineers|Bright Tomorrow|Stanford)[^.\n]{0,40}Scholarship)\b/i,
+      )?.[1]?.trim() ?? null
+    );
+  }
+  return null;
+}
+
+function guidedConditionSatisfied(
+  db: Database.Database,
+  applicationId: string,
+  currentStep: number,
+  analysis: ReturnType<typeof analyzeApplication>,
+): boolean {
+  const repos = new Repositories(db);
+  const docs = repos.listDocuments(applicationId);
+  if (currentStep === 0) {
+    return docs.some((d) => d.category === "transcript");
+  }
+  if (currentStep === 1) {
+    const essay = docs.find((d) => d.category === "essay");
+    const text = essay ? repos.getDocumentText(essay.id) || "" : "";
+    const words = (text.trim().match(/\b[\w’'-]+\b/g) || []).length;
+    const hasOrg = /future engineers scholarship/i.test(text);
+    const openEssayBlocking = analysis.issues.some(
+      (i) =>
+        i.status === "open" &&
+        i.severity === "blocking" &&
+        (i.documentId === essay?.id || /essay|word|organization|scholarship/i.test(i.title)),
+    );
+    return hasOrg && words >= 400 && words <= 500 && !openEssayBlocking;
+  }
+  if (currentStep === 2) {
+    const rec = docs.find((d) => d.category === "recommendation");
+    const text = rec ? repos.getDocumentText(rec.id) || "" : "";
+    return /dear\s+future engineers scholarship\s+committee/i.test(text);
+  }
+  if (currentStep === 3) {
+    const resume = docs.find((d) => d.category === "resume");
+    const text = resume ? repos.getDocumentText(resume.id) || "" : "";
+    const email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase();
+    const emailIssues = analysis.issues.some(
+      (i) =>
+        i.status === "open" &&
+        i.severity === "blocking" &&
+        /email/i.test(i.title + i.explanation),
+    );
+    return email === "alex.chen@example.com" && !emailIssues;
+  }
+  if (currentStep === 4) {
+    const packet = docs.find((d) => d.category === "combined_packet");
+    const name = packet?.originalFilename || "";
+    const filenameFail = analysis.validations.some(
+      (v) =>
+        !v.passed &&
+        v.severity === "blocking" &&
+        /filename/i.test(v.message + (v.rule || "")),
+    );
+    return /^Chen_Alex_2026\.pdf$/i.test(name) && !filenameFail;
+  }
+  if (currentStep === 5) {
+    return analysis.report.status === "ready";
+  }
+  return false;
+}
+
 export async function applySuggestedDemoFix(
   db: Database.Database,
   applicationId: string,
+  input: { mode: "suggested" } | { mode: "custom"; value: string } = {
+    mode: "suggested",
+  },
 ) {
-  return advanceGuidedDemo(db, applicationId);
+  return withDemoLock(applicationId, async () => {
+    const repos = new Repositories(db);
+    const app = repos.getApplication(applicationId);
+    if (!app) {
+      throw new AppError("NOT_FOUND", "Application not found.", 404, [
+        "Start a new guided demo from the landing page.",
+      ]);
+    }
+    if (!app.isDemo) {
+      throw new AppError("NOT_DEMO", "Application is not a guided demo.", 400);
+    }
+
+    const current = app.demoStep ?? 0;
+    if (current >= 6) {
+      return {
+        application: app,
+        step: DEMO_STEPS[6],
+        analysis: analyzeApplication(db, applicationId),
+        done: true,
+        advanced: false,
+        appliedFix: {
+          mode: input.mode,
+          field: null,
+          requestedValue: null,
+          extractedValue: null,
+          resolved: true,
+        },
+      };
+    }
+
+    const next = current + 1;
+    let overrides: DemoTransitionOverrides = {};
+    let field: "scholarship_reference" | "organization" | "email" | "filename" | null =
+      null;
+    let requestedValue: string | null = null;
+
+    if (input.mode === "custom") {
+      if (current === 0 || current === 5) {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "This guided step does not accept a custom text value.",
+          400,
+        );
+      }
+      const sanitized = sanitizeCustomDemoValue(current, input.value);
+      field = sanitized.field;
+      requestedValue = sanitized.value;
+      if (field === "scholarship_reference") {
+        overrides = { scholarshipReferenceOverride: sanitized.value };
+      } else if (field === "organization") {
+        overrides = { organizationOverride: sanitized.value };
+      } else if (field === "email") {
+        overrides = { emailOverride: sanitized.value };
+      } else if (field === "filename") {
+        overrides = { filenameOverride: sanitized.value };
+      }
+    }
+
+    const analysis = await applyDemoTransition(db, applicationId, next, overrides);
+    const extractedValue = extractAppliedValue(db, applicationId, field);
+    const resolved =
+      input.mode === "suggested"
+        ? true
+        : guidedConditionSatisfied(db, applicationId, current, analysis);
+
+    if (resolved) {
+      repos.updateApplication(applicationId, { demoStep: next });
+      repos.addActivity(
+        applicationId,
+        "demo_advanced",
+        input.mode === "custom"
+          ? `Demo advanced to step ${next} after custom ${field} edit`
+          : `Demo advanced to step ${next}: ${DEMO_STEPS[next]?.title ?? ""}`,
+        input.mode === "custom"
+          ? {
+              demoEdit: true,
+              field,
+              requestedValue,
+              extractedValue,
+            }
+          : undefined,
+      );
+    } else {
+      repos.addActivity(
+        applicationId,
+        "demo_custom_edit",
+        `Custom ${field} edit processed without advancing the guided step`,
+        {
+          demoEdit: true,
+          field,
+          requestedValue,
+          extractedValue,
+          resolved: false,
+        },
+      );
+    }
+
+    const finalStep = resolved ? next : current;
+    return {
+      application: repos.getApplication(applicationId),
+      step: DEMO_STEPS[finalStep],
+      analysis,
+      done: finalStep >= 6,
+      advanced: resolved,
+      appliedFix: {
+        mode: input.mode,
+        field,
+        requestedValue,
+        extractedValue,
+        resolved,
+      },
+    };
+  });
 }
