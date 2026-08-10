@@ -230,34 +230,87 @@ export const api = {
     ),
   demoSteps: () =>
     request<{
-      steps: Array<{ step: number; title: string; summary: string }>;
+      steps: Array<{
+        step: number;
+        title: string;
+        summary: string;
+        nextAction: string | null;
+        shortLabel: string;
+      }>;
     }>("/api/demo/steps"),
   startDemo: () =>
     request<{
       application: Application;
       analysis: { report: ReadinessReport; issues: Issue[] };
-      step: { step: number; title: string; summary: string };
-      steps: Array<{ step: number; title: string; summary: string }>;
+      step: {
+        step: number;
+        title: string;
+        summary: string;
+        nextAction: string | null;
+        shortLabel: string;
+      };
+      steps: Array<{
+        step: number;
+        title: string;
+        summary: string;
+        nextAction: string | null;
+        shortLabel: string;
+      }>;
     }>("/api/demo/start", { method: "POST" }),
   advanceDemo: (id: string) =>
     request<{
       application: Application;
       analysis: { report: ReadinessReport; issues: Issue[] };
-      step: { step: number; title: string; summary: string };
+      step: {
+        step: number;
+        title: string;
+        summary: string;
+        nextAction: string | null;
+        shortLabel: string;
+      };
       done?: boolean;
     }>(`/api/demo/${id}/advance`, { method: "POST" }),
   fixDemo: (id: string) =>
     request<{
       application: Application;
       analysis: { report: ReadinessReport; issues: Issue[] };
-      step: { step: number; title: string; summary: string };
+      step: {
+        step: number;
+        title: string;
+        summary: string;
+        nextAction: string | null;
+        shortLabel: string;
+      };
       done?: boolean;
     }>(`/api/demo/${id}/fix`, { method: "POST" }),
   resetDemo: (id: string) =>
     request<{
       application: Application;
       analysis: { report: ReadinessReport; issues: Issue[] };
-      step: { step: number; title: string; summary: string };
+      step: {
+        step: number;
+        title: string;
+        summary: string;
+        nextAction: string | null;
+        shortLabel: string;
+      };
       done?: boolean;
     }>(`/api/demo/${id}/reset`, { method: "POST" }),
+  setDemoStep: (id: string, step: number) =>
+    request<{
+      application: Application;
+      analysis: { report: ReadinessReport; issues: Issue[] };
+      step: {
+        step: number;
+        title: string;
+        summary: string;
+        nextAction: string | null;
+        shortLabel: string;
+      };
+      done?: boolean;
+    }>(`/api/demo/${id}/step`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step }),
+    }),
 };
