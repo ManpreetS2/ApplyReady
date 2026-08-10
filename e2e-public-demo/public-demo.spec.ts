@@ -295,11 +295,284 @@ test.describe("public demo portfolio mode", () => {
     await pageA.getByRole("button", { name: "Apply suggested fix" }).click();
     await expect(pageA.getByText(/Add unofficial transcript/i)).toBeVisible();
     await expect(pageB.getByText(/Initial packet review/i)).toBeVisible();
+    await expect(pageB.getByRole("button", { name: "Start guided demo" })).toHaveCount(0);
+
+    // UUID isolation: B's session must not become A's application id.
+    const idB = await pageB.evaluate(() =>
+      sessionStorage.getItem("applyready.publicDemoApplicationId"),
+    );
+    expect(idB).toBe(bodyB.application.id);
+    expect(idB).not.toBe(bodyA.application.id);
 
     await applyFixesUntilReady(pageA);
     await applyFixesUntilReady(pageB);
 
     await contextA.close();
     await contextB.close();
+  });
+  test("active demo exposes only Apply suggested fix mutation CTA", async ({ page }) => {
+    await page.goto("/demo");
+    await waitForDemoPageReady(page);
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    await expect(page.getByTestId("demo-apply-fix")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("button", { name: "Next step" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Apply suggested fix" })).toHaveCount(1);
+
+    const before = await page.getByText(/Step\s+1/i).textContent();
+    const response = page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/demo/") &&
+        r.url().includes("/fix") &&
+        r.request().method() === "POST",
+      { timeout: 60_000 },
+    );
+    await page.getByTestId("demo-apply-fix").click();
+    await response;
+    await expect(page.getByText(/Add unofficial transcript/i)).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.getByText(/Step\s+2/i)).toBeVisible();
+    expect(before).not.toMatch(/Step\s+2/i);
+    await expect(
+      page.getByText(/Apply the suggested fix to add a fictional unofficial transcript/i),
+    ).toBeVisible();
+  });
+
+  test("rapid double-click on Apply suggested fix advances only one step", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await waitForDemoPageReady(page);
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    const fix = page.getByTestId("demo-apply-fix");
+    await expect(fix).toBeVisible({ timeout: 60_000 });
+
+    let fixPosts = 0;
+    page.on("request", (req) => {
+      if (
+        req.method() === "POST" &&
+        req.url().includes("/api/demo/") &&
+        req.url().includes("/fix")
+      ) {
+        fixPosts += 1;
+      }
+    });
+
+    // Synchronous double-dispatch in the page — mirrors a real double-click race.
+    await fix.evaluate((el) => {
+      const button = el as HTMLButtonElement;
+      button.click();
+      button.click();
+    });
+    await expect(page.getByText(/Add unofficial transcript/i)).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.getByText(/Step\s+2/i)).toBeVisible();
+    await expect(page.getByText(/Fix essay length/i)).toHaveCount(0);
+    expect(fixPosts).toBe(1);
+  });
+
+  test("direct evidence link restores demo session from clean storage", async ({
+    browser,
+    baseURL,
+  }) => {
+    const starter = await browser.newContext();
+    const startPage = await starter.newPage();
+    await startPage.goto(`${baseURL}/demo`);
+    await waitForDemoPageReady(startPage);
+    const startRes = startPage.waitForResponse(
+      (r) => r.url().includes("/api/demo/start") && r.request().method() === "POST",
+    );
+    await startPage.getByRole("button", { name: "Start guided demo" }).click();
+    const body = await (await startRes).json();
+    const demoId = body.application.id as string;
+    await starter.close();
+
+    const clean = await browser.newContext();
+    const page = await clean.newPage();
+    await page.goto(`${baseURL}/applications/${demoId}`);
+    await expect(page.getByTestId("application-detail")).toBeVisible({ timeout: 60_000 });
+    const stored = await page.evaluate(() =>
+      sessionStorage.getItem("applyready.publicDemoApplicationId"),
+    );
+    expect(stored).toBe(demoId);
+
+    await page.getByRole("link", { name: "Back to guided demo" }).click();
+    await waitForDemoPageReady(page);
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-state", "active");
+    await expect(page.getByRole("button", { name: "Start guided demo" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Apply suggested fix" })).toBeVisible();
+    await clean.close();
+  });
+
+  test("direct report link restores demo session from clean storage", async ({
+    browser,
+    baseURL,
+  }) => {
+    const starter = await browser.newContext();
+    const startPage = await starter.newPage();
+    await startPage.goto(`${baseURL}/demo`);
+    await waitForDemoPageReady(startPage);
+    const startRes = startPage.waitForResponse(
+      (r) => r.url().includes("/api/demo/start") && r.request().method() === "POST",
+    );
+    await startPage.getByRole("button", { name: "Start guided demo" }).click();
+    const body = await (await startRes).json();
+    const demoId = body.application.id as string;
+    await starter.close();
+
+    const clean = await browser.newContext();
+    const page = await clean.newPage();
+    await page.goto(`${baseURL}/applications/${demoId}/report`);
+    await expect(page.getByTestId("report-page")).toBeVisible({ timeout: 60_000 });
+    const stored = await page.evaluate(() =>
+      sessionStorage.getItem("applyready.publicDemoApplicationId"),
+    );
+    expect(stored).toBe(demoId);
+
+    await page.getByRole("link", { name: "Back to guided demo" }).click();
+    await waitForDemoPageReady(page);
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-state", "active");
+    await expect(page.getByRole("button", { name: "Start guided demo" })).toHaveCount(0);
+    await clean.close();
+  });
+
+  test("expired evidence and report links offer recovery", async ({ page }) => {
+    const fakeId = "00000000-0000-4000-8000-000000000099";
+    await page.goto(`/applications/${fakeId}`);
+    await expect(page.getByText(/This temporary demo has expired/i)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByRole("link", { name: /Start a new guided demo/i }),
+    ).toBeVisible();
+
+    await page.goto(`/applications/${fakeId}/report`);
+    await expect(page.getByTestId("report-recovery")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/This temporary demo has expired/i)).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Start a new guided demo/i }),
+    ).toBeVisible();
+  });
+
+  test("temporary 500 on evidence load keeps recovery path", async ({ page }) => {
+    await page.goto("/demo");
+    await waitForDemoPageReady(page);
+    const startRes = page.waitForResponse(
+      (r) => r.url().includes("/api/demo/start") && r.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    const body = await (await startRes).json();
+    const demoId = body.application.id as string;
+
+    let failedOnce = false;
+    await page.route(`**/api/applications/${demoId}`, async (route) => {
+      if (!failedOnce && route.request().method() === "GET") {
+        failedOnce = true;
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: { code: "INTERNAL", message: "Temporary failure" },
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto(`/applications/${demoId}`);
+    await expect(page.getByText(/Temporary failure|Request failed|failed/i).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("link", { name: /Back to guided demo/i })).toBeVisible();
+    const retained = await page.evaluate(() =>
+      sessionStorage.getItem("applyready.publicDemoApplicationId"),
+    );
+    expect(retained).toBe(demoId);
+  });
+
+  test("evidence readiness tab shows server factor breakdown", async ({ page }) => {
+    await page.goto("/demo");
+    await waitForDemoPageReady(page);
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    await expect(page.getByRole("link", { name: "View evidence" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.getByRole("link", { name: "View evidence" }).click();
+    await expect(page.getByTestId("application-detail")).toBeVisible({ timeout: 60_000 });
+    await page.getByRole("tab", { name: "Readiness Report" }).click();
+    await expect(
+      page.getByText(/Run analysis to refresh the weighted score breakdown/i),
+    ).toHaveCount(0);
+    await expect(page.getByText(/Required present:/i)).toBeVisible();
+    await expect(page.locator("li").filter({ hasText: /\d+\/\d+/ }).first()).toBeVisible();
+  });
+
+  test("mobile evidence and report pages avoid horizontal overflow", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await waitForDemoPageReady(page);
+    const startRes = page.waitForResponse(
+      (r) => r.url().includes("/api/demo/start") && r.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    const body = await (await startRes).json();
+    const demoId = body.application.id as string;
+
+    for (const size of [
+      { width: 390, height: 844 },
+      { width: 430, height: 932 },
+      { width: 768, height: 1024 },
+    ]) {
+      await page.setViewportSize(size);
+      await page.goto(`/applications/${demoId}`);
+      await expect(page.getByTestId("application-detail")).toBeVisible({ timeout: 60_000 });
+      await page.getByRole("tab", { name: "Documents" }).click();
+      await page.getByRole("tab", { name: "Issues" }).click();
+      await page.getByRole("tab", { name: "Readiness Report" }).click();
+      const evidenceScroll = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(evidenceScroll, `evidence ${size.width}x${size.height}`).toBeLessThanOrEqual(1);
+
+      await page.goto(`/applications/${demoId}/report`);
+      await expect(page.getByTestId("report-page")).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByRole("button", { name: /Print \/ Save as PDF/i })).toBeVisible();
+      await expect(page.getByRole("button", { name: /Export JSON/i })).toBeVisible();
+      const reportScroll = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(reportScroll, `report ${size.width}x${size.height}`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test("reset stays disabled-safe while a fix mutation is pending", async ({ page }) => {
+    await page.goto("/demo");
+    await waitForDemoPageReady(page);
+    await page.getByRole("button", { name: "Start guided demo" }).click();
+    const fix = page.getByTestId("demo-apply-fix");
+    await expect(fix).toBeVisible({ timeout: 60_000 });
+
+    await page.route("**/api/demo/*/fix", async (route) => {
+      await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+
+    const pending = page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/demo/") &&
+        r.url().includes("/fix") &&
+        r.request().method() === "POST",
+      { timeout: 60_000 },
+    );
+    await fix.click();
+    await expect(page.getByRole("button", { name: "Reset demo" })).toBeDisabled();
+    await expect(fix).toBeDisabled();
+    await pending;
+    await expect(page.getByText(/Add unofficial transcript/i)).toBeVisible({
+      timeout: 60_000,
+    });
   });
 });
