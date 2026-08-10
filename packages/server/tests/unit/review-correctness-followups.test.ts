@@ -12,6 +12,8 @@ import {
   resetGuidedDemo,
   setDemoReplaceTestHooks,
   setDemoResetTestHooks,
+  setDemoStepTestHooks,
+  setGuidedDemoStep,
   startGuidedDemo,
 } from "../../src/services/demo/demo.js";
 import { useTempDb } from "../helpers.js";
@@ -21,6 +23,71 @@ const ctx = useTempDb();
 afterEach(() => {
   setDemoResetTestHooks(null);
   setDemoReplaceTestHooks(null);
+  setDemoStepTestHooks(null);
+});
+
+describe("review fixes — demo step rewind failure safety", () => {
+  it("keeps the live demo when staged rewind fails before swap", async () => {
+    const db = ctx.db();
+    const repos = new Repositories(db);
+    const started = await startGuidedDemo(db);
+    const id = started.application!.id;
+    await advanceGuidedDemo(db, id);
+    await advanceGuidedDemo(db, id);
+    expect(repos.getApplication(id)!.demoStep).toBe(2);
+
+    const beforeDocs = repos.listDocuments(id);
+    const beforeStored = beforeDocs.map((d) => d.storedFilename);
+    const beforeStep = repos.getApplication(id)!.demoStep;
+    const essay = beforeDocs.find((d) => d.category === "essay")!;
+    const essayText = repos.getDocumentText(essay.id);
+
+    setDemoStepTestHooks({ failAfter: "before_swap" });
+    await expect(setGuidedDemoStep(db, id, 1)).rejects.toThrow(
+      /Injected demo step failure before swap/,
+    );
+
+    expect(repos.getApplication(id)!.demoStep).toBe(beforeStep);
+    expect(repos.listDocuments(id).map((d) => d.id).sort()).toEqual(
+      beforeDocs.map((d) => d.id).sort(),
+    );
+    for (const name of beforeStored) {
+      expect(fs.existsSync(resolveUploadPath("applications", name))).toBe(true);
+    }
+    expect(repos.getDocumentText(essay.id)).toBe(essayText);
+    expect(repos.listApplications().filter((a) => a.id !== id)).toHaveLength(0);
+  });
+
+  it("rewinds deterministically and can advance again", async () => {
+    const db = ctx.db();
+    const repos = new Repositories(db);
+    const started = await startGuidedDemo(db);
+    const id = started.application!.id;
+    await advanceGuidedDemo(db, id);
+    await advanceGuidedDemo(db, id);
+    await advanceGuidedDemo(db, id);
+    expect(repos.getApplication(id)!.demoStep).toBe(3);
+
+    const rewound = await setGuidedDemoStep(db, id, 1);
+    expect(rewound.application!.id).toBe(id);
+    expect(rewound.application!.demoStep).toBe(1);
+    expect(rewound.step.title).toMatch(/Transcript added/i);
+    const docs = repos.listDocuments(id);
+    expect(docs.some((d) => d.category === "transcript")).toBe(true);
+    expect(
+      rewound.analysis.issues.some(
+        (i) =>
+          i.status === "open" &&
+          (i.code === "WORD_LIMIT" ||
+            i.code === "ORGANIZATION_MISMATCH" ||
+            /essay|organization|word/i.test(i.title)),
+      ),
+    ).toBe(true);
+
+    const advanced = await advanceGuidedDemo(db, id);
+    expect(advanced.application!.demoStep).toBe(2);
+    expect(repos.listDocuments(id).filter((d) => d.category === "essay")).toHaveLength(1);
+  });
 });
 
 describe("review fixes — demo replace failure safety", () => {
