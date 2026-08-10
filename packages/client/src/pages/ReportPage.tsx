@@ -1,67 +1,92 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../lib/api";
+import type { ApplicationExport } from "@applyready/shared";
+import { api, ApiClientError } from "../lib/api";
 import { useConfig } from "../lib/config";
+import { rememberDemoId } from "../lib/demoSession";
 import { formatDate, readinessLabel } from "../lib/format";
 import { ErrorBanner } from "../components/ErrorBanner";
 
 export function ReportPage() {
   const { id = "" } = useParams();
   const { publicDemoMode } = useConfig();
-  const [report, setReport] = useState<Record<string, unknown> | null>(null);
+  const [report, setReport] = useState<ApplicationExport | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const payload = await api.exportApplication(id);
+    if (publicDemoMode && payload.application.isDemo) {
+      rememberDemoId(payload.application.id);
+    }
+    setReport(payload);
+  }, [id, publicDemoMode]);
 
   useEffect(() => {
-    api.exportApplication(id).then(setReport).catch(setError);
-  }, [id]);
+    setBusy(true);
+    setError(null);
+    setReport(null);
+    load()
+      .catch(setError)
+      .finally(() => setBusy(false));
+  }, [load]);
 
-  if (!report && !error) return <p>Loading report…</p>;
-  if (!report) return <ErrorBanner error={error} />;
+  if (!report && !error) {
+    return (
+      <p role="status" aria-busy="true">
+        Loading report…
+      </p>
+    );
+  }
 
-  const application = report.application as {
-    name: string;
-    organization: string;
-    deadline: string | null;
-  };
-  const readiness = report.readiness as {
-    status: "ready" | "nearly_ready" | "needs_attention" | "not_ready" | "unable_to_determine";
-    score: number;
-  };
-  const requirements = report.requirements as Array<{
-    id: string;
-    title: string;
-    required: boolean;
-    certainty?: "required" | "optional" | "uncertain";
-    category: string;
-    sourceEvidence: string;
-  }>;
-  const documents = report.documents as Array<{
-    id: string;
-    originalFilename: string;
-    category: string | null;
-  }>;
-  const matches = report.matches as Array<{
-    requirementId: string;
-    documentId: string;
-    status: string;
-  }>;
-  const issues = report.issues as Array<{
-    id: string;
-    title: string;
-    severity: string;
-    status: string;
-    explanation: string;
-    evidence: string | null;
-  }>;
-  const validations = report.validations as Array<{
-    id: string;
-    message: string;
-    passed: boolean;
-    severity: string;
-  }>;
+  if (!report) {
+    const expired =
+      publicDemoMode && error instanceof ApiClientError && error.code === "NOT_FOUND";
+    return (
+      <div className="space-y-4" data-testid="report-recovery">
+        <ErrorBanner error={error} />
+        {expired ? (
+          <p className="text-sm text-ink-600 dark:text-ink-300" role="status">
+            This temporary demo has expired.
+          </p>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {publicDemoMode ? (
+            <Link to="/demo" className="btn-primary inline-flex">
+              {expired ? "Start a new guided demo" : "Back to guided demo"}
+            </Link>
+          ) : (
+            <Link to="/dashboard" className="btn-secondary inline-flex">
+              Return to dashboard
+            </Link>
+          )}
+          {!expired ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={busy}
+              aria-busy={busy}
+              onClick={() => {
+                setBusy(true);
+                setError(null);
+                load()
+                  .catch(setError)
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Retry
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  const { application, readiness, requirements, documents, matches, issues, validations } =
+    report;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="report-page">
       <div className="no-print flex flex-wrap gap-2">
         <button type="button" className="btn-primary" onClick={() => window.print()}>
           Print / Save as PDF
@@ -94,12 +119,14 @@ export function ReportPage() {
       </div>
 
       <article className="card space-y-6 p-6 sm:p-8">
-        <header>
+        <header className="min-w-0">
           <p className="font-display text-3xl font-semibold">ApplyReady</p>
-          <h1 className="mt-2 font-display text-4xl font-semibold">
+          <h1 className="mt-2 font-display text-4xl font-semibold break-words">
             {application.name}
           </h1>
-          <p className="text-ink-600 dark:text-ink-300">{application.organization}</p>
+          <p className="break-words text-ink-600 dark:text-ink-300">
+            {application.organization}
+          </p>
           <dl className="mt-4 grid gap-3 sm:grid-cols-3 text-sm">
             <div>
               <dt className="text-ink-500">Deadline</dt>
@@ -107,7 +134,7 @@ export function ReportPage() {
             </div>
             <div>
               <dt className="text-ink-500">Readiness</dt>
-              <dd>
+              <dd className="break-words">
                 {readinessLabel(readiness.status)} · {readiness.score}%
               </dd>
             </div>
@@ -129,7 +156,7 @@ export function ReportPage() {
                 req.category === "proof_of_enrollment";
               return (
                 <li key={req.id} className="rounded-xl border border-[var(--line)] p-3 text-sm">
-                  <p className="font-semibold">
+                  <p className="font-semibold break-words">
                     {req.title}{" "}
                     <span className="font-normal text-ink-500">
                       ({req.certainty === "uncertain"
@@ -140,12 +167,12 @@ export function ReportPage() {
                       · {req.category})
                     </span>
                   </p>
-                  <p>
+                  <p className="break-words">
                     {isEligibility
                       ? "Checked against applicant profile and extracted document facts (not a separate upload)."
                       : `Match: ${doc?.originalFilename || "None"} ${match ? `(${match.status})` : ""}`}
                   </p>
-                  <div className="evidence mt-2">{req.sourceEvidence}</div>
+                  <div className="evidence mt-2 break-words">{req.sourceEvidence}</div>
                 </li>
               );
             })}
@@ -156,7 +183,7 @@ export function ReportPage() {
           <h2 className="font-display text-2xl font-semibold">Validation results</h2>
           <ul className="mt-3 space-y-2 text-sm">
             {validations.map((v) => (
-              <li key={v.id}>
+              <li key={v.id} className="break-words">
                 {v.passed ? "Pass" : "Fail"} · {v.severity}: {v.message}
               </li>
             ))}
@@ -170,11 +197,13 @@ export function ReportPage() {
               .filter((i) => i.status === "open")
               .map((issue) => (
                 <li key={issue.id} className="rounded-xl border border-[var(--line)] p-3 text-sm">
-                  <p className="font-semibold">
+                  <p className="font-semibold break-words">
                     {issue.severity}: {issue.title}
                   </p>
-                  <p>{issue.explanation}</p>
-                  {issue.evidence ? <div className="evidence mt-2">{issue.evidence}</div> : null}
+                  <p className="break-words">{issue.explanation}</p>
+                  {issue.evidence ? (
+                    <div className="evidence mt-2 break-words">{issue.evidence}</div>
+                  ) : null}
                 </li>
               ))}
           </ul>

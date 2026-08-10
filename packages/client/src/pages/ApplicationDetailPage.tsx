@@ -12,8 +12,9 @@ import type {
   Requirement,
   ValidationResult,
 } from "@applyready/shared";
-import { api } from "../lib/api";
+import { api, ApiClientError } from "../lib/api";
 import { useConfig } from "../lib/config";
+import { rememberDemoId } from "../lib/demoSession";
 import { daysRemaining, formatDate, scoreTone } from "../lib/format";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -29,6 +30,10 @@ type Tab =
   | "readiness"
   | "activity";
 
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof ApiClientError && error.code === "NOT_FOUND";
+}
+
 export function ApplicationDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -36,6 +41,7 @@ export function ApplicationDetailPage() {
   const readOnly = publicDemoMode;
   const [tab, setTab] = useState<Tab>("overview");
   const [error, setError] = useState<unknown>(null);
+  const [reportUnavailable, setReportUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [application, setApplication] = useState<Application | null>(null);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -65,62 +71,59 @@ export function ApplicationDetailPage() {
   });
 
   const load = useCallback(async () => {
-    const data = await api.getApplication(id);
+    const [detailResult, exportResult] = await Promise.all([
+      api.getApplication(id),
+      api.exportApplication(id).then(
+        (payload) => ({ ok: true as const, payload }),
+        (err: unknown) => ({ ok: false as const, err }),
+      ),
+    ]);
     const vault = readOnly
       ? { documents: [] as VaultDocument[] }
       : await api.listVault().catch(() => ({ documents: [] as VaultDocument[] }));
-    setApplication(data.application);
-    setRequirements(data.requirements);
-    setDocuments(data.documents);
-    setIssues(data.issues);
-    setMatches(data.matches);
-    setConflicts(data.conflicts);
-    setProfile(data.profile);
+
+    if (publicDemoMode && detailResult.application.isDemo) {
+      rememberDemoId(detailResult.application.id);
+    }
+
+    setApplication(detailResult.application);
+    setRequirements(detailResult.requirements);
+    setDocuments(detailResult.documents);
+    setIssues(detailResult.issues);
+    setMatches(detailResult.matches);
+    setConflicts(detailResult.conflicts);
+    setProfile(detailResult.profile);
     setVaultDocs(vault.documents);
-    setActivity(data.activity);
-    setValidations(data.validations);
-    if (data.profile) {
+    setActivity(detailResult.activity);
+    setValidations(detailResult.validations);
+    if (detailResult.profile) {
       setProfileDraft({
-        fullLegalName: data.profile.fullLegalName || "",
-        email: data.profile.email || "",
-        phone: data.profile.phone || "",
-        school: data.profile.school || "",
-        major: data.profile.major || "",
-        gpa: data.profile.gpa || "",
-        expectedGraduationDate: data.profile.expectedGraduationDate || "",
-        targetOrganization: data.profile.targetOrganization || "",
-        currentlyEnrolled: data.profile.currentlyEnrolled,
+        fullLegalName: detailResult.profile.fullLegalName || "",
+        email: detailResult.profile.email || "",
+        phone: detailResult.profile.phone || "",
+        school: detailResult.profile.school || "",
+        major: detailResult.profile.major || "",
+        gpa: detailResult.profile.gpa || "",
+        expectedGraduationDate: detailResult.profile.expectedGraduationDate || "",
+        targetOrganization: detailResult.profile.targetOrganization || "",
+        currentlyEnrolled: detailResult.profile.currentlyEnrolled,
       });
     }
-    if (data.application.readinessScore != null && data.application.readinessStatus) {
-      setReport({
-        applicationId: id,
-        score: data.application.readinessScore,
-        status: data.application.readinessStatus,
-        breakdown: {
-          requiredPresent: 0,
-          requiredTotal: data.requirements.filter((r) => r.required).length,
-          confirmedMatches: data.matches.filter((m) => m.userConfirmed).length,
-          likelyMatches: data.matches.filter((m) => m.status === "likely").length,
-          validationPassed: data.validations.filter((v) => v.passed).length,
-          validationTotal: data.validations.length,
-          blockingIssues: data.issues.filter(
-            (i) => i.status === "open" && i.severity === "blocking",
-          ).length,
-          warnings: data.issues.filter(
-            (i) => i.status === "open" && i.severity === "warning",
-          ).length,
-          uncertainRequirements: data.requirements.filter((r) => !r.userConfirmed).length,
-          consistencyConflicts: data.conflicts.filter((c) => !c.resolved).length,
-          factors: [],
-        },
-        generatedAt: data.application.lastAnalyzedAt || new Date().toISOString(),
-      });
+    if (exportResult.ok) {
+      setReport(exportResult.payload.readiness);
+      setReportUnavailable(false);
+    } else {
+      setReport(null);
+      setReportUnavailable(true);
     }
-  }, [id, readOnly]);
+  }, [id, publicDemoMode, readOnly]);
 
   useEffect(() => {
     setBusy(true);
+    setError(null);
+    setApplication(null);
+    setReport(null);
+    setReportUnavailable(false);
     load()
       .catch(setError)
       .finally(() => setBusy(false));
@@ -138,6 +141,7 @@ export function ApplicationDetailPage() {
     try {
       const res = await api.analyze(id);
       setReport(res.report);
+      setReportUnavailable(false);
       await load();
     } catch (e) {
       setError(e);
@@ -147,16 +151,26 @@ export function ApplicationDetailPage() {
   }
 
   if (!application && !error) {
-    return <p>Loading application…</p>;
+    return (
+      <p role="status" aria-busy="true">
+        Loading application…
+      </p>
+    );
   }
 
   if (!application) {
+    const expired = publicDemoMode && isNotFoundError(error);
     return (
       <div className="space-y-4">
         <ErrorBanner error={error || new Error("Application not found")} />
+        {expired ? (
+          <p className="text-sm text-ink-600 dark:text-ink-300" role="status">
+            This temporary demo has expired.
+          </p>
+        ) : null}
         {publicDemoMode ? (
           <Link to="/demo" className="btn-primary inline-flex">
-            Back to guided demo
+            {expired ? "Start a new guided demo" : "Back to guided demo"}
           </Link>
         ) : (
           <Link to="/dashboard" className="btn-secondary inline-flex">
@@ -178,13 +192,15 @@ export function ApplicationDetailPage() {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="application-detail">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <p className="text-sm uppercase tracking-wide text-ink-500">
             {application.type} · {application.organization}
           </p>
-          <h1 className="font-display text-4xl font-semibold">{application.name}</h1>
+          <h1 className="font-display text-4xl font-semibold break-words">
+            {application.name}
+          </h1>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <ReadinessBadge
               status={application.readinessStatus}
@@ -598,9 +614,9 @@ export function ApplicationDetailPage() {
                   {issue.status}
                 </span>
               </div>
-              <h2 className="font-display text-xl font-semibold">{issue.title}</h2>
-              <p className="text-sm">{issue.explanation}</p>
-              {issue.evidence ? <div className="evidence">{issue.evidence}</div> : null}
+              <h2 className="font-display text-xl font-semibold break-words">{issue.title}</h2>
+              <p className="text-sm break-words">{issue.explanation}</p>
+              {issue.evidence ? <div className="evidence break-words">{issue.evidence}</div> : null}
               {issue.recommendedFix ? (
                 <p className="text-sm">
                   <strong>Recommended fix:</strong> {issue.recommendedFix}
@@ -768,35 +784,63 @@ export function ApplicationDetailPage() {
       {tab === "readiness" && (
         <section className="card space-y-4 p-6">
           <h2 className="font-display text-2xl font-semibold">Readiness report</h2>
-          <p className={`font-display text-5xl font-semibold ${scoreTone(application.readinessScore)}`}>
-            {application.readinessScore ?? "—"}%
+          <p
+            className={`font-display text-5xl font-semibold break-words ${scoreTone(
+              report?.score ?? application.readinessScore,
+            )}`}
+          >
+            {report?.score ?? application.readinessScore ?? "—"}%
           </p>
           <ReadinessBadge
-            status={application.readinessStatus}
-            score={application.readinessScore}
+            status={report?.status ?? application.readinessStatus}
+            score={report?.score ?? application.readinessScore}
           />
           {report?.breakdown.factors?.length ? (
             <ul className="space-y-2">
               {report.breakdown.factors.map((f) => (
                 <li key={f.label} className="rounded-xl border border-[var(--line)] p-3 text-sm">
                   <div className="flex justify-between gap-3">
-                    <strong>{f.label}</strong>
-                    <span>
+                    <strong className="min-w-0 break-words">{f.label}</strong>
+                    <span className="shrink-0">
                       {f.score}/{f.weight}
                     </span>
                   </div>
-                  <p className="text-ink-600 dark:text-ink-300">{f.note}</p>
+                  <p className="break-words text-ink-600 dark:text-ink-300">{f.note}</p>
                 </li>
               ))}
             </ul>
-          ) : (
-            <p className="text-sm text-ink-600 dark:text-ink-300">
-              Run analysis to refresh the weighted score breakdown.
+          ) : reportUnavailable ? (
+            <p className="text-sm text-ink-600 dark:text-ink-300" role="status">
+              The detailed readiness breakdown is temporarily unavailable. Score and status
+              above still reflect the latest saved analysis.
             </p>
-          )}
+          ) : !report ? (
+            <p className="text-sm text-ink-600 dark:text-ink-300">
+              {readOnly
+                ? "Readiness details will appear after the guided demo analyzes this packet."
+                : "Run analysis to refresh the weighted score breakdown."}
+            </p>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2 text-sm">
-            <p>Validations passed: {validations.filter((v) => v.passed).length}/{validations.length}</p>
-            <p>Open blocking issues: {blocking.length}</p>
+            <p>
+              Required present:{" "}
+              {report
+                ? `${report.breakdown.requiredPresent}/${report.breakdown.requiredTotal}`
+                : "—"}
+            </p>
+            <p>
+              Validations passed:{" "}
+              {report
+                ? `${report.breakdown.validationPassed}/${report.breakdown.validationTotal}`
+                : `${validations.filter((v) => v.passed).length}/${validations.length}`}
+            </p>
+            <p>
+              Confirmed matches: {report ? report.breakdown.confirmedMatches : "—"}
+            </p>
+            <p>
+              Open blocking issues:{" "}
+              {report ? report.breakdown.blockingIssues : blocking.length}
+            </p>
           </div>
           <Link to={`/applications/${id}/report`} className="btn-secondary">
             Open printable report

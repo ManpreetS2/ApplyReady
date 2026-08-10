@@ -2,6 +2,7 @@ import type {
   ActivityEvent,
   ApplicantProfile,
   Application,
+  ApplicationExport,
   DocumentMatch,
   DocumentRecord,
   Issue,
@@ -87,7 +88,7 @@ export const api = {
   deleteApplication: (id: string) =>
     request<{ ok: boolean }>(`/api/applications/${id}`, { method: "DELETE" }),
   exportApplication: (id: string) =>
-    request<Record<string, unknown>>(`/api/applications/${id}/export`),
+    request<ApplicationExport>(`/api/applications/${id}/export`),
   addTextSource: (id: string, text: string, sourceName: string) =>
     request<{ requirements: Requirement[] }>(
       `/api/applications/${id}/sources/text`,
