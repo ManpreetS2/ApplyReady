@@ -855,6 +855,14 @@ export function ApplicationDetailPage() {
             {activity.map((event) => (
               <li key={event.id} className="border-b border-[var(--line)] pb-3 text-sm">
                 <p className="font-medium">{event.message}</p>
+                {event.metadata?.demoEdit === true ? (
+                  <p
+                    className="mt-1 text-xs text-sky-200/90"
+                    data-testid="visitor-demo-edit-marker"
+                  >
+                    Visitor-provided demo edit
+                  </p>
+                ) : null}
                 <p className="text-ink-500">{formatDate(event.createdAt)}</p>
               </li>
             ))}

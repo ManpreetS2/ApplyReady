@@ -30,12 +30,21 @@ function findScholarshipInEssay(text: string): string | null {
   const contextual = text.match(/through the (.+?) and how mentorship/i);
   if (contextual?.[1]?.trim()) return contextual[1].trim();
   const match = text.match(
-    /\b((?:Horizon Innovators|Future Engineers|Bright Tomorrow|Stanford)[^.\n]{0,40}Scholarship)\b/i,
+    /\b((?:Horizon Innovators|Future Engineers|Bright Tomorrow|Stanford)[^.\n]{0,80}Scholarship)\b/i,
   );
   return match?.[1]?.trim() || null;
 }
 
-function findEmailInResume(text: string): string | null {
+/** Literal labeled contact value from the fictional resume (may not be a valid email). */
+export function findResumeContactValue(text: string): string | null {
+  // PDF text extraction may flatten newlines, so take the next token only.
+  const labeled = text.match(/Email:\s*(\S+)/i);
+  if (labeled?.[1]?.trim()) return labeled[1].trim();
+  return null;
+}
+
+/** What ApplyReady recognizes as an email address in the resume text. */
+export function findExtractedResumeEmail(text: string): string | null {
   const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   return match?.[0] || null;
 }
@@ -80,6 +89,7 @@ export function getDemoFixPreview(
       documentCategory: "transcript",
       field: null,
       currentValue: null,
+      extractedValue: null,
       suggestedValue: DEMO_SUGGESTED.transcriptFilename,
       contextBefore: null,
       contextAfter: null,
@@ -96,8 +106,9 @@ export function getDemoFixPreview(
     const essay = docs.find((d) => d.category === "essay");
     const text = essay ? repos.getDocumentText(essay.id) || "" : "";
     const current =
-      findScholarshipInEssay(text) || DEMO_SUGGESTED.badScholarshipReference;
-    const around = excerptAround(text, current);
+      findScholarshipInEssay(text) ||
+      (essay ? null : DEMO_SUGGESTED.badScholarshipReference);
+    const around = current ? excerptAround(text, current) : null;
     const essayReq = requirements.find((r) => r.category === "essay");
     return {
       step,
@@ -107,6 +118,7 @@ export function getDemoFixPreview(
       documentCategory: "essay",
       field: "scholarship_reference",
       currentValue: current,
+      extractedValue: current,
       suggestedValue: DEMO_SUGGESTED.scholarshipReference,
       contextBefore: around?.before ?? "…through the ",
       contextAfter: around?.after ?? " and how mentorship…",
@@ -118,7 +130,7 @@ export function getDemoFixPreview(
             "An essay between 400 and 500 words is required. The essay must reference the Future Engineers Scholarship.",
           ],
       detectedEvidence: [
-        `Detected scholarship reference: ${current}`,
+        `Current document scholarship reference: ${current ?? "not found"}`,
         `Detected word count: ${wordCount(text)}`,
       ],
     };
@@ -128,8 +140,9 @@ export function getDemoFixPreview(
     const rec = docs.find((d) => d.category === "recommendation");
     const text = rec ? repos.getDocumentText(rec.id) || "" : "";
     const current =
-      findOrgInRecommendation(text) || DEMO_SUGGESTED.badOrganization;
-    const around = excerptAround(text, current);
+      findOrgInRecommendation(text) ||
+      (rec ? null : DEMO_SUGGESTED.badOrganization);
+    const around = current ? excerptAround(text, current) : null;
     const recReq = requirements.find((r) => r.category === "recommendation");
     return {
       step,
@@ -140,6 +153,7 @@ export function getDemoFixPreview(
       documentCategory: "recommendation",
       field: "organization",
       currentValue: current,
+      extractedValue: current,
       suggestedValue: DEMO_SUGGESTED.organization,
       contextBefore: around?.before ?? "Dear ",
       contextAfter: around?.after ?? " Committee,",
@@ -150,39 +164,49 @@ export function getDemoFixPreview(
         : [
             "The recommendation letter must be addressed to Future Engineers Scholarship.",
           ],
-      detectedEvidence: [`Detected addressee: ${current}`],
+      detectedEvidence: [`Current document addressee: ${current ?? "not found"}`],
     };
   }
 
   if (step === 3) {
     const resume = docs.find((d) => d.category === "resume");
     const text = resume ? repos.getDocumentText(resume.id) || "" : "";
-    const current = findEmailInResume(text) || DEMO_SUGGESTED.badEmail;
-    const around = excerptAround(text, current);
+    const current =
+      findResumeContactValue(text) || (resume ? null : DEMO_SUGGESTED.badEmail);
+    const extracted = text ? findExtractedResumeEmail(text) : null;
+    const around = current ? excerptAround(text, current) : null;
     const resumeReq = requirements.find((r) => r.category === "resume");
     return {
       step,
       title: stepMeta.nextAction || "Update resume email",
-      explanation: "The resume still contains an outdated email address.",
+      explanation: "The resume still contains an outdated or inconsistent email address.",
       kind: "replace_text",
       documentCategory: "resume",
       field: "email",
       currentValue: current,
+      extractedValue: extracted,
       suggestedValue: DEMO_SUGGESTED.email,
-      contextBefore: around?.before ?? "Alex Chen\n",
-      contextAfter: around?.after ?? "\n(408) 555-0142",
+      contextBefore: around?.before ?? "Email: ",
+      contextAfter: around?.after ?? "",
       editable: true,
       maxLength: 254,
       requirementEvidence: resumeReq
         ? [resumeReq.sourceEvidence]
         : ["A resume in PDF format is required."],
-      detectedEvidence: [`Detected resume email: ${current}`],
+      detectedEvidence: [
+        `Current document contact value: ${current ?? "not found"}`,
+        extracted
+          ? `ApplyReady extracted email: ${extracted}`
+          : "ApplyReady extracted: not recognized as a valid email",
+      ],
     };
   }
 
   if (step === 4) {
     const packet = docs.find((d) => d.category === "combined_packet");
-    const current = packet?.originalFilename || DEMO_SUGGESTED.badFilename;
+    const current =
+      packet?.originalFilename ||
+      (packet ? null : DEMO_SUGGESTED.badFilename);
     const packetReq = requirements.find(
       (r) => r.category === "combined_packet" || Boolean(r.filenamePattern),
     );
@@ -194,6 +218,7 @@ export function getDemoFixPreview(
       documentCategory: "combined_packet",
       field: "filename",
       currentValue: current,
+      extractedValue: current,
       suggestedValue: DEMO_SUGGESTED.filename,
       contextBefore: null,
       contextAfter: null,
@@ -202,7 +227,7 @@ export function getDemoFixPreview(
       requirementEvidence: packetReq
         ? [packetReq.sourceEvidence]
         : ["Submit a combined packet named LastName_FirstName_2026.pdf."],
-      detectedEvidence: [`Detected filename: ${current}`],
+      detectedEvidence: [`Current document filename: ${current ?? "not found"}`],
     };
   }
 
@@ -216,6 +241,7 @@ export function getDemoFixPreview(
     documentCategory: null,
     field: null,
     currentValue: null,
+    extractedValue: null,
     suggestedValue: null,
     contextBefore: null,
     contextAfter: null,

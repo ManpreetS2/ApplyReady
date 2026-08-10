@@ -44,8 +44,8 @@ export function Layout() {
             className="border-b border-[var(--line)] px-4 py-1.5 text-center text-xs text-ink-300"
             role="status"
           >
-            Public portfolio demo — all names and documents are fictional. Real uploads are
-            disabled.
+            Public portfolio demo — fictional documents and temporary example edits only. Real
+            uploads are disabled.
           </p>
         ) : null}
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">

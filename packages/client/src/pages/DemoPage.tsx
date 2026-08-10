@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import type { Application, Issue, ReadinessReport } from "@applyready/shared";
+import type {
+  Application,
+  DemoAppliedFix,
+  DemoFixPreview,
+  DemoStepInfo,
+  Issue,
+  ReadinessReport,
+} from "@applyready/shared";
 import { api, ApiClientError } from "../lib/api";
 import { useConfig } from "../lib/config";
 import {
@@ -9,70 +16,17 @@ import {
   rememberDemoId,
 } from "../lib/demoSession";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { FixReviewDialog } from "../components/FixReviewDialog";
 import { IssueBadge, ReadinessBadge } from "../components/StatusBadge";
 
-type DemoStepState = {
-  step: number;
-  title: string;
-  summary: string;
-  nextAction: string | null;
-  shortLabel: string;
-};
-
-const FALLBACK_STEPS: DemoStepState[] = [
+/** Minimal client fallback only if demo step APIs fail. Prefer server steps. */
+const FALLBACK_STEPS: DemoStepInfo[] = [
   {
     step: 0,
-    title: "Initial packet review",
-    summary: "The fictional packet starts with several intentional problems.",
-    nextAction: "Add fictional transcript",
-    shortLabel: "Review",
-  },
-  {
-    step: 1,
-    title: "Transcript added",
-    summary:
-      "The required fictional transcript is now present. The essay is still too long and references the wrong scholarship.",
-    nextAction: "Fix essay length and scholarship reference",
-    shortLabel: "Transcript",
-  },
-  {
-    step: 2,
-    title: "Essay corrected",
-    summary:
-      "The essay now meets the word limit and references Future Engineers Scholarship. The recommendation still addresses the wrong organization.",
-    nextAction: "Fix recommendation letter",
-    shortLabel: "Essay",
-  },
-  {
-    step: 3,
-    title: "Recommendation corrected",
-    summary:
-      "The recommendation now addresses Future Engineers Scholarship. The resume still contains the outdated email.",
-    nextAction: "Update resume email",
-    shortLabel: "Recommendation",
-  },
-  {
-    step: 4,
-    title: "Resume corrected",
-    summary:
-      "The fictional resume now uses the current email. The combined packet filename still needs correction.",
-    nextAction: "Fix combined packet filename",
-    shortLabel: "Resume",
-  },
-  {
-    step: 5,
-    title: "Packet filename corrected",
-    summary:
-      "The required files and filename are now corrected. Final matching and readiness confirmation remain.",
-    nextAction: "Finalize readiness",
-    shortLabel: "Packet",
-  },
-  {
-    step: 6,
-    title: "Ready to submit",
-    summary: "All required fictional items are verified.",
-    nextAction: null,
-    shortLabel: "Ready",
+    title: "Guided demo",
+    summary: "Guided demo step unavailable until the server step list loads.",
+    nextAction: "Continue",
+    shortLabel: "Start",
   },
 ];
 
@@ -80,14 +34,14 @@ function applyDemoResponse(
   res: {
     application: Application;
     analysis: { report: ReadinessReport; issues: Issue[] };
-    step: DemoStepState;
+    step: DemoStepInfo;
     done?: boolean;
   },
   setters: {
     setApplication: (a: Application) => void;
     setReport: (r: ReadinessReport) => void;
     setIssues: (i: Issue[]) => void;
-    setStep: (s: DemoStepState) => void;
+    setStep: (s: DemoStepInfo) => void;
     setDone: (d: boolean) => void;
   },
 ) {
@@ -99,6 +53,22 @@ function applyDemoResponse(
   setters.setDone(Boolean(res.done) || res.step.step >= 6);
 }
 
+function toAppliedFix(raw: {
+  mode: "suggested" | "custom";
+  field: string | null;
+  requestedValue: string | null;
+  extractedValue: string | null;
+  resolved: boolean;
+}): DemoAppliedFix {
+  return {
+    mode: raw.mode,
+    field: raw.field as DemoAppliedFix["field"],
+    requestedValue: raw.requestedValue,
+    extractedValue: raw.extractedValue,
+    resolved: raw.resolved,
+  };
+}
+
 export function DemoPage() {
   const { publicDemoMode } = useConfig();
   const [error, setError] = useState<unknown>(null);
@@ -108,9 +78,14 @@ export function DemoPage() {
   const [application, setApplication] = useState<Application | null>(null);
   const [report, setReport] = useState<ReadinessReport | null>(null);
   const [issues, setIssues] = useState<Issue[]>([]);
-  const [step, setStep] = useState<DemoStepState | null>(null);
-  const [allSteps, setAllSteps] = useState<DemoStepState[]>(FALLBACK_STEPS);
+  const [step, setStep] = useState<DemoStepInfo | null>(null);
+  const [allSteps, setAllSteps] = useState<DemoStepInfo[]>(FALLBACK_STEPS);
   const [done, setDone] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [preview, setPreview] = useState<DemoFixPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [appliedFix, setAppliedFix] = useState<DemoAppliedFix | null>(null);
+  const reviewButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,6 +150,11 @@ export function DemoPage() {
     setBusy(false);
   }
 
+  function closeReview() {
+    setReviewOpen(false);
+    setPreview(null);
+  }
+
   const setters = {
     setApplication,
     setReport,
@@ -191,6 +171,8 @@ export function DemoPage() {
       if (res.steps?.length) setAllSteps(res.steps);
       applyDemoResponse(res, setters);
       setDone(false);
+      setAppliedFix(null);
+      closeReview();
     } catch (e) {
       setError(e);
     } finally {
@@ -198,17 +180,70 @@ export function DemoPage() {
     }
   }
 
-  async function applyFix() {
+  async function openReview() {
+    if (!application || done || reviewOpen || previewLoading || busyRef.current) {
+      return;
+    }
+    setError(null);
+    setPreviewLoading(true);
+    try {
+      const res = await api.demoFixPreview(application.id);
+      setPreview(res.preview);
+      setReviewOpen(true);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function useSuggestedFix() {
     if (!application || done || !beginBusy()) return;
     setError(null);
     try {
-      const res = await api.fixDemo(application.id);
+      const res = await api.fixDemo(application.id, { mode: "suggested" });
       applyDemoResponse(res, setters);
+      if (res.appliedFix && !res.appliedFix.resolved) {
+        setAppliedFix(toAppliedFix(res.appliedFix));
+      } else {
+        setAppliedFix(null);
+      }
+      closeReview();
     } catch (e) {
       setError(e);
     } finally {
       endBusy();
     }
+  }
+
+  async function useCustomFix(value: string) {
+    if (!application || done || !beginBusy()) return;
+    setError(null);
+    try {
+      const res = await api.fixDemo(application.id, {
+        mode: "custom",
+        value,
+      });
+      applyDemoResponse(res, setters);
+      if (res.appliedFix) {
+        setAppliedFix(toAppliedFix(res.appliedFix));
+      } else {
+        setAppliedFix(null);
+      }
+      closeReview();
+    } catch (e) {
+      setError(e);
+    } finally {
+      endBusy();
+    }
+  }
+
+  function keepCurrentVersion() {
+    if (busyRef.current) return;
+    closeReview();
+    window.requestAnimationFrame(() => {
+      reviewButtonRef.current?.focus();
+    });
   }
 
   async function goToStep(target: number) {
@@ -217,6 +252,8 @@ export function DemoPage() {
     try {
       const res = await api.setDemoStep(application.id, target);
       applyDemoResponse(res, setters);
+      setAppliedFix(null);
+      closeReview();
     } catch (e) {
       setError(e);
     } finally {
@@ -230,6 +267,8 @@ export function DemoPage() {
     try {
       const res = await api.resetDemo(application.id);
       applyDemoResponse(res, setters);
+      setAppliedFix(null);
+      closeReview();
     } catch (e) {
       setError(e);
     } finally {
@@ -262,6 +301,8 @@ export function DemoPage() {
       setStep(matched);
       setDone(demoStep >= 6);
       setReport(exported?.readiness ?? null);
+      setAppliedFix(null);
+      closeReview();
     } catch (e) {
       const code =
         e && typeof e === "object" && "code" in e
@@ -309,7 +350,7 @@ export function DemoPage() {
           Future Engineers Scholarship — a recruiter-friendly walkthrough that uses the real
           extraction, matching, validation, and readiness pipelines.
           {publicDemoMode
-            ? " All documents are fictional and generated for this portfolio demo."
+            ? " Fictional documents are generated for this portfolio demo. Optional custom scalar edits use fictional or example values only and are removed with the demo."
             : ""}
         </p>
       </div>
@@ -455,6 +496,7 @@ export function DemoPage() {
                   disabled={busy}
                   aria-busy={busy}
                   data-testid="demo-previous-step"
+                  title="Going back restores the fictional packet to that earlier demo state."
                   onClick={(event) => {
                     if (busyRef.current) return;
                     event.currentTarget.disabled = true;
@@ -466,25 +508,27 @@ export function DemoPage() {
               ) : null}
               {!done ? (
                 <button
+                  ref={reviewButtonRef}
                   type="button"
                   className="btn-primary"
-                  disabled={busy}
-                  aria-busy={busy}
-                  data-testid="demo-apply-fix"
+                  disabled={busy || previewLoading}
+                  aria-busy={busy || previewLoading}
+                  data-testid="demo-review-fix"
                   aria-label={
                     nextAction
-                      ? `Apply fix: ${nextAction}`
-                      : "Apply suggested fix"
+                      ? `Review fix: ${nextAction}`
+                      : "Review suggested fix"
                   }
-                  onClick={(event) => {
-                    if (busyRef.current || done) return;
-                    event.currentTarget.disabled = true;
-                    void applyFix();
+                  onClick={() => {
+                    if (busyRef.current || previewLoading || done) return;
+                    void openReview();
                   }}
                 >
-                  {nextAction
-                    ? `Apply fix: ${nextAction}`
-                    : "Apply suggested fix"}
+                  {previewLoading
+                    ? "Loading review…"
+                    : nextAction
+                      ? `Review fix: ${nextAction}`
+                      : "Review suggested fix"}
                 </button>
               ) : null}
               <Link to={`/applications/${application.id}`} className="btn-ghost">
@@ -534,6 +578,53 @@ export function DemoPage() {
                 </Link>
               ) : null}
             </div>
+            {appliedFix ? (
+              <div
+                className="space-y-3 rounded-xl border border-[var(--line)] bg-ink-950/40 p-4"
+                data-testid="demo-applied-fix"
+                role="status"
+              >
+                <h3 className="font-display text-lg font-semibold text-ink-50">
+                  {appliedFix.mode === "custom"
+                    ? "Your edit was processed"
+                    : "Suggested change processed"}
+                </h3>
+                {appliedFix.mode === "custom" ? (
+                  <>
+                    <p className="break-words text-sm text-ink-300">
+                      <span className="text-ink-400">You entered:</span>{" "}
+                      {appliedFix.requestedValue ?? "—"}
+                    </p>
+                    <p className="break-words text-sm text-ink-300">
+                      <span className="text-ink-400">ApplyReady extracted:</span>{" "}
+                      {appliedFix.extractedValue ??
+                        (appliedFix.field === "email"
+                          ? "No valid email detected"
+                          : "—")}
+                    </p>
+                  </>
+                ) : null}
+                <p
+                  className={
+                    appliedFix.resolved
+                      ? "text-sm font-medium text-accent-300"
+                      : "text-sm font-medium text-amber-200"
+                  }
+                >
+                  {appliedFix.resolved
+                    ? "Issue resolved"
+                    : appliedFix.mode === "suggested"
+                      ? "The suggested change was processed, but the expected issue is still present."
+                      : "Issue still needs attention"}
+                </p>
+                <Link
+                  to={`/applications/${application.id}`}
+                  className="btn-ghost inline-flex"
+                >
+                  View evidence
+                </Link>
+              </div>
+            ) : null}
             {done ? (
               <p
                 className="rounded-xl bg-accent-100 px-4 py-3 text-accent-900 dark:bg-accent-900/40 dark:text-accent-100"
@@ -565,6 +656,15 @@ export function DemoPage() {
                 ))
             )}
           </section>
+
+          <FixReviewDialog
+            open={reviewOpen}
+            preview={preview}
+            busy={busy}
+            onUseSuggested={() => void useSuggestedFix()}
+            onUseCustom={(value) => void useCustomFix(value)}
+            onKeepCurrent={keepCurrentVersion}
+          />
         </>
       ) : null}
     </div>

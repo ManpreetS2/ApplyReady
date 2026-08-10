@@ -50,13 +50,17 @@ export function PrivacyPage() {
         <section className="card space-y-3 p-6">
           <h2 className="font-display text-2xl font-semibold">Hosted public demo</h2>
           <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed">
-            <li>The demo contains only generated fictional documents and names.</li>
-            <li>Do not submit personal documents — real uploads are disabled.</li>
+            <li>
+              Use fictional or example values only. Custom demo edits are temporarily
+              processed inside the generated fictional packet and are automatically
+              removed with the demo. Do not enter personal or sensitive information.
+            </li>
+            <li>Real uploads remain disabled. No account is created.</li>
             <li>Demo data is temporary and automatically removed after inactivity.</li>
-            <li>No account is created and visitors cannot enumerate other demos.</li>
+            <li>Visitors cannot enumerate other demos.</li>
             <li>
               Independent concurrent demo sessions use unpredictable IDs. This is not authenticated
-              private storage — do not enter personal or sensitive information.
+              private storage.
             </li>
             <li>
               This hosted demo is not the same as running the full local ApplyReady application.
@@ -65,6 +69,7 @@ export function PrivacyPage() {
               ApplyReady is not legal, immigration, financial, admissions, or professional
               compliance advice.
             </li>
+            <li>No external AI provider receives the documents.</li>
           </ul>
           <p className="text-sm text-ink-600 dark:text-ink-300">
             {storage?.privacy}

@@ -349,7 +349,10 @@ export interface DemoFixPreview {
     | "combined_packet"
     | null;
   field: DemoFixField;
+  /** Literal value currently present in the fictional document (not a fallback). */
   currentValue: string | null;
+  /** Value ApplyReady successfully extracted/recognized, or null if unrecognized. */
+  extractedValue: string | null;
   suggestedValue: string | null;
   contextBefore: string | null;
   contextAfter: string | null;
