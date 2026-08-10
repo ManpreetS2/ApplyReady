@@ -29,6 +29,8 @@ let resetFailAfter: "ingest" | "seed" | "analyze" | "before_swap" | null = null;
 let replaceFailAfter: "before_swap" | null = null;
 /** Test-only: force a failure during staged set-step materialization. */
 let stepFailAfter: "before_swap" | "replay" | null = null;
+/** Test-only: force applySuggestedDemoFix to treat the guided condition as unmet for specific apps. */
+const forceFixUnresolvedIds = new Set<string>();
 
 export function setDemoResetTestHooks(
   hooks: {
@@ -61,6 +63,20 @@ export function setDemoStepTestHooks(
     throw new Error("setDemoStepTestHooks is only available in tests");
   }
   stepFailAfter = hooks?.failAfter ?? null;
+}
+
+export function setDemoFixTestHooks(
+  hooks: {
+    forceUnresolvedFor?: string | null;
+  } | null,
+): void {
+  if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
+    throw new Error("setDemoFixTestHooks is only available in tests");
+  }
+  forceFixUnresolvedIds.clear();
+  if (hooks?.forceUnresolvedFor) {
+    forceFixUnresolvedIds.add(hooks.forceUnresolvedFor);
+  }
 }
 
 async function confirmExtractedRequirements(
@@ -831,6 +847,16 @@ function sanitizeCustomDemoValue(
   );
 }
 
+function fieldForGuidedStep(
+  currentStep: number,
+): "scholarship_reference" | "organization" | "email" | "filename" | null {
+  if (currentStep === 1) return "scholarship_reference";
+  if (currentStep === 2) return "organization";
+  if (currentStep === 3) return "email";
+  if (currentStep === 4) return "filename";
+  return null;
+}
+
 function extractAppliedValue(
   db: Database.Database,
   applicationId: string,
@@ -846,6 +872,7 @@ function extractAppliedValue(
     const resume = docs.find((d) => d.category === "resume");
     if (!resume) return null;
     const text = repos.getDocumentText(resume.id) || "";
+    // Only return a recognized email — invalid contact strings are null.
     return text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? null;
   }
   if (field === "organization") {
@@ -862,7 +889,7 @@ function extractAppliedValue(
     if (contextual) return contextual;
     return (
       text.match(
-        /\b((?:Horizon Innovators|Future Engineers|Bright Tomorrow|Stanford)[^.\n]{0,40}Scholarship)\b/i,
+        /\b((?:Horizon Innovators|Future Engineers|Bright Tomorrow|Stanford)[^.\n]{0,80}Scholarship)\b/i,
       )?.[1]?.trim() ?? null
     );
   }
@@ -885,13 +912,9 @@ function guidedConditionSatisfied(
     const text = essay ? repos.getDocumentText(essay.id) || "" : "";
     const words = (text.trim().match(/\b[\w’'-]+\b/g) || []).length;
     const hasOrg = /future engineers scholarship/i.test(text);
-    const openEssayBlocking = analysis.issues.some(
-      (i) =>
-        i.status === "open" &&
-        i.severity === "blocking" &&
-        (i.documentId === essay?.id || /essay|word|organization|scholarship/i.test(i.title)),
-    );
-    return hasOrg && words >= 400 && words <= 500 && !openEssayBlocking;
+    // Content checks are authoritative for the guided essay fix. Broader open-issue
+    // scans can false-negative after category replace before rematch settles.
+    return Boolean(essay) && hasOrg && words >= 400 && words <= 500;
   }
   if (currentStep === 2) {
     const rec = docs.find((d) => d.category === "recommendation");
@@ -902,24 +925,12 @@ function guidedConditionSatisfied(
     const resume = docs.find((d) => d.category === "resume");
     const text = resume ? repos.getDocumentText(resume.id) || "" : "";
     const email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase();
-    const emailIssues = analysis.issues.some(
-      (i) =>
-        i.status === "open" &&
-        i.severity === "blocking" &&
-        /email/i.test(i.title + i.explanation),
-    );
-    return email === "alex.chen@example.com" && !emailIssues;
+    return email === "alex.chen@example.com";
   }
   if (currentStep === 4) {
     const packet = docs.find((d) => d.category === "combined_packet");
     const name = packet?.originalFilename || "";
-    const filenameFail = analysis.validations.some(
-      (v) =>
-        !v.passed &&
-        v.severity === "blocking" &&
-        /filename/i.test(v.message + (v.rule || "")),
-    );
-    return /^Chen_Alex_2026\.pdf$/i.test(name) && !filenameFail;
+    return /^Chen_Alex_2026\.pdf$/i.test(name);
   }
   if (currentStep === 5) {
     return analysis.report.status === "ready";
@@ -966,8 +977,7 @@ export async function applySuggestedDemoFix(
 
     const next = current + 1;
     let overrides: DemoTransitionOverrides = {};
-    let field: "scholarship_reference" | "organization" | "email" | "filename" | null =
-      null;
+    let field = fieldForGuidedStep(current);
     let requestedValue: string | null = null;
 
     if (input.mode === "custom") {
@@ -995,9 +1005,8 @@ export async function applySuggestedDemoFix(
     const analysis = await applyDemoTransition(db, applicationId, next, overrides);
     const extractedValue = extractAppliedValue(db, applicationId, field);
     const resolved =
-      input.mode === "suggested"
-        ? true
-        : guidedConditionSatisfied(db, applicationId, current, analysis);
+      !forceFixUnresolvedIds.has(applicationId) &&
+      guidedConditionSatisfied(db, applicationId, current, analysis);
 
     if (resolved) {
       repos.updateApplication(applicationId, { demoStep: next });
@@ -1010,24 +1019,31 @@ export async function applySuggestedDemoFix(
         input.mode === "custom"
           ? {
               demoEdit: true,
+              mode: "custom",
               field,
-              requestedValue,
-              extractedValue,
+              resolved: true,
             }
           : undefined,
       );
     } else {
       repos.addActivity(
         applicationId,
-        "demo_custom_edit",
-        `Custom ${field} edit processed without advancing the guided step`,
-        {
-          demoEdit: true,
-          field,
-          requestedValue,
-          extractedValue,
-          resolved: false,
-        },
+        input.mode === "custom" ? "demo_custom_edit" : "demo_fix_unresolved",
+        input.mode === "custom"
+          ? `Custom ${field} edit processed without advancing the guided step`
+          : `Suggested demo fix processed without advancing the guided step`,
+        input.mode === "custom"
+          ? {
+              demoEdit: true,
+              mode: "custom",
+              field,
+              resolved: false,
+            }
+          : {
+              mode: "suggested",
+              field,
+              resolved: false,
+            },
       );
     }
 
