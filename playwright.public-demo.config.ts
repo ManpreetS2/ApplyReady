@@ -69,6 +69,7 @@ export default defineConfig({
       NODE_ENV: "production",
       PUBLIC_DEMO_MODE: "true",
       PUBLIC_DEMO_TTL_HOURS: "6",
+      PUBLIC_DEMO_MAX_ACTIVE_DEMOS: "200",
       APPLYREADY_DATA_DIR: dataDir,
       APPLYREADY_UPLOADS_DIR: uploadsDir,
       APPLYREADY_DB_PATH: dbPath,

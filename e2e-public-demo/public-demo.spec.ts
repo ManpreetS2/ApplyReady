@@ -68,21 +68,7 @@ async function applyFixesUntilReady(page: Page) {
     if (await ready.isVisible().catch(() => false)) {
       return;
     }
-    const fix = page.getByTestId("demo-apply-fix");
-    await expect(fix).toBeVisible();
-    if (await fix.isDisabled()) {
-      await page.waitForTimeout(500);
-      continue;
-    }
-    const response = page.waitForResponse(
-      (r) =>
-        (r.url().includes("/api/demo/") &&
-          (r.url().includes("/fix") || r.url().includes("/advance"))) &&
-        r.request().method() === "POST",
-      { timeout: 60_000 },
-    );
-    await fix.click();
-    await response;
+    await applyFixOnce(page);
   }
   await expect(
     page.getByText(/Ready to submit — all required items verified/i),
@@ -94,20 +80,36 @@ async function applyFixesUntilReady(page: Page) {
 async function startDemo(page: Page) {
   await waitForDemoPageReady(page);
   await page.getByRole("button", { name: "Start guided demo" }).click();
-  await expect(page.getByTestId("demo-apply-fix")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("demo-review-fix")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(/Initial packet review/i)).toBeVisible();
 }
 
+function isDemoFixPost(url: string) {
+  try {
+    return /\/api\/demo\/[^/]+\/fix\/?$/.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 async function applyFixOnce(page: Page) {
-  const response = page.waitForResponse(
-    (r) =>
-      r.url().includes("/api/demo/") &&
-      r.url().includes("/fix") &&
-      r.request().method() === "POST",
-    { timeout: 60_000 },
+  const stepBefore = await page.getByTestId("demo-page").getAttribute("data-demo-step");
+  await page.getByTestId("demo-review-fix").click();
+  await expect(page.getByTestId("fix-review-dialog")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("demo-page")).toHaveAttribute(
+    "data-demo-step",
+    stepBefore || "0",
   );
-  await page.getByTestId("demo-apply-fix").click();
-  await response;
+  const apply = page.getByTestId("fix-review-use-suggested");
+  await expect(apply).toBeEnabled();
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === "POST" && isDemoFixPost(r.url()),
+      { timeout: 60_000 },
+    ),
+    apply.evaluate((el) => (el as HTMLButtonElement).click()),
+  ]);
+  await expect(page.getByTestId("fix-review-dialog")).toHaveCount(0);
 }
 
 async function advanceToStep(page: Page, targetStep: number) {
@@ -134,7 +136,7 @@ test.describe("public demo portfolio mode", () => {
     await page.goto("/");
     await expect(
       page.getByText(
-        /Public portfolio demo — all names and documents are fictional\. Real uploads are disabled\./i,
+        /Public portfolio demo — fictional documents and temporary example edits only\. Real uploads are disabled\./i,
       ),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: /Try the guided demo/i })).toBeVisible();
@@ -178,7 +180,7 @@ test.describe("public demo portfolio mode", () => {
     await page.goto("/demo");
     await waitForDemoPageReady(page);
     await page.getByRole("button", { name: "Start guided demo" }).click();
-    await expect(page.getByTestId("demo-apply-fix")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("demo-review-fix")).toBeVisible({ timeout: 60_000 });
     await applyFixOnce(page);
     await expect(page.getByText(/Transcript added/i)).toBeVisible({
       timeout: 60_000,
@@ -200,7 +202,7 @@ test.describe("public demo portfolio mode", () => {
     await page.goto("/demo");
     await waitForDemoPageReady(page);
     await page.getByRole("button", { name: "Start guided demo" }).click();
-    await expect(page.getByTestId("demo-apply-fix")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("demo-review-fix")).toBeVisible({ timeout: 60_000 });
 
     const savedId = await page.evaluate(() =>
       sessionStorage.getItem("applyready.publicDemoApplicationId"),
@@ -317,7 +319,7 @@ test.describe("public demo portfolio mode", () => {
 
     expect(bodyA.application.id).not.toBe(bodyB.application.id);
 
-    await pageA.getByTestId("demo-apply-fix").click();
+    await applyFixOnce(pageA);
     await expect(pageA.getByText(/Transcript added/i)).toBeVisible({ timeout: 60_000 });
     await expect(pageB.getByText(/Initial packet review/i)).toBeVisible();
     await expect(pageB.getByRole("button", { name: "Start guided demo" })).toHaveCount(0);
@@ -335,13 +337,13 @@ test.describe("public demo portfolio mode", () => {
     await contextA.close();
     await contextB.close();
   });
-  test("active demo exposes only Apply suggested fix mutation CTA", async ({ page }) => {
+  test("active demo exposes only Review fix mutation CTA", async ({ page }) => {
     await page.goto("/demo");
     await waitForDemoPageReady(page);
     await page.getByRole("button", { name: "Start guided demo" }).click();
-    await expect(page.getByTestId("demo-apply-fix")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("demo-review-fix")).toBeVisible({ timeout: 60_000 });
     await expect(page.getByRole("button", { name: "Next step" })).toHaveCount(0);
-    await expect(page.getByTestId("demo-apply-fix")).toHaveCount(1);
+    await expect(page.getByTestId("demo-review-fix")).toHaveCount(1);
     await expect(page.getByTestId("demo-next-action")).toContainText(
       /Add fictional transcript/i,
     );
@@ -354,28 +356,25 @@ test.describe("public demo portfolio mode", () => {
     await expect(page.getByTestId("demo-next-action")).toContainText(/Fix essay length/i);
   });
 
-  test("rapid double-click on Apply suggested fix advances only one step", async ({
+  test("rapid double-click on Use suggested advances only one step", async ({
     page,
   }) => {
     await page.goto("/demo");
     await waitForDemoPageReady(page);
     await page.getByRole("button", { name: "Start guided demo" }).click();
-    const fix = page.getByTestId("demo-apply-fix");
-    await expect(fix).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("demo-review-fix")).toBeVisible({ timeout: 60_000 });
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
 
     let fixPosts = 0;
     page.on("request", (req) => {
-      if (
-        req.method() === "POST" &&
-        req.url().includes("/api/demo/") &&
-        req.url().includes("/fix")
-      ) {
+      if (req.method() === "POST" && isDemoFixPost(req.url())) {
         fixPosts += 1;
       }
     });
 
-    // Synchronous double-dispatch in the page — mirrors a real double-click race.
-    await fix.evaluate((el) => {
+    const apply = page.getByTestId("fix-review-use-suggested");
+    await apply.evaluate((el) => {
       const button = el as HTMLButtonElement;
       button.click();
       button.click();
@@ -417,7 +416,7 @@ test.describe("public demo portfolio mode", () => {
     await waitForDemoPageReady(page);
     await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-state", "active");
     await expect(page.getByRole("button", { name: "Start guided demo" })).toHaveCount(0);
-    await expect(page.getByTestId("demo-apply-fix")).toBeVisible();
+    await expect(page.getByTestId("demo-review-fix")).toBeVisible();
     await clean.close();
   });
 
@@ -568,24 +567,26 @@ test.describe("public demo portfolio mode", () => {
     await page.goto("/demo");
     await waitForDemoPageReady(page);
     await page.getByRole("button", { name: "Start guided demo" }).click();
-    const fix = page.getByTestId("demo-apply-fix");
-    await expect(fix).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("demo-review-fix")).toBeVisible({ timeout: 60_000 });
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
 
     await page.route("**/api/demo/*/fix", async (route) => {
+      if (route.request().method() !== "POST" || !isDemoFixPost(route.request().url())) {
+        await route.continue();
+        return;
+      }
       await new Promise((r) => setTimeout(r, 1500));
       await route.continue();
     });
 
     const pending = page.waitForResponse(
-      (r) =>
-        r.url().includes("/api/demo/") &&
-        r.url().includes("/fix") &&
-        r.request().method() === "POST",
+      (r) => r.request().method() === "POST" && isDemoFixPost(r.url()),
       { timeout: 60_000 },
     );
-    await fix.click();
+    await page.getByTestId("fix-review-use-suggested").click();
     await expect(page.getByRole("button", { name: "Reset demo" })).toBeDisabled();
-    await expect(fix).toBeDisabled();
+    await expect(page.getByTestId("fix-review-use-suggested")).toBeDisabled();
     await pending;
     await expect(page.getByText(/Transcript added/i)).toBeVisible({
       timeout: 60_000,
@@ -676,7 +677,7 @@ test.describe("public demo portfolio mode", () => {
     await page.goto("/demo");
     await startAndCompleteDemo(page);
     await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "6");
-    await expect(page.getByTestId("demo-apply-fix")).toHaveCount(0);
+    await expect(page.getByTestId("demo-review-fix")).toHaveCount(0);
 
     await page.getByTestId("demo-previous-step").click();
     await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "5", {
@@ -685,7 +686,7 @@ test.describe("public demo portfolio mode", () => {
     await expect(
       page.getByText(/Ready to submit — all required items verified/i),
     ).toHaveCount(0);
-    await expect(page.getByTestId("demo-apply-fix")).toBeVisible();
+    await expect(page.getByTestId("demo-review-fix")).toBeVisible();
     await applyFixOnce(page);
     await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "6");
     await expect(
@@ -784,5 +785,238 @@ test.describe("public demo portfolio mode", () => {
       );
       expect(scroll, `${size.width}x${size.height}`).toBeLessThanOrEqual(1);
     }
+  });
+
+  test("Review fix opens dialog without mutating; Keep current does nothing", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await startDemo(page);
+    let fixPosts = 0;
+    page.on("request", (req) => {
+      if (req.method() === "POST" && isDemoFixPost(req.url())) {
+        fixPosts += 1;
+      }
+    });
+
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+    await expect(page.getByText(/Unofficial_Transcript\.pdf/i)).toBeVisible();
+    expect(fixPosts).toBe(0);
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "0");
+
+    await page.getByTestId("fix-review-keep-current").click();
+    await expect(page.getByTestId("fix-review-dialog")).toHaveCount(0);
+    expect(fixPosts).toBe(0);
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "0");
+  });
+
+  test("Escape closes review dialog and returns focus to Review button", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await startDemo(page);
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("fix-review-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("demo-review-fix")).toBeFocused();
+  });
+
+  test("custom wrong organization stays on step and updates CURRENT preview", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await startDemo(page);
+    await advanceToStep(page, 2);
+
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+    await expect(page.getByTestId("fix-review-dialog")).toContainText(
+      /Horizon Innovators Scholarship/i,
+    );
+    await expect(page.getByTestId("fix-review-dialog")).toContainText(
+      /Future Engineers Scholarship/i,
+    );
+
+    await page.getByTestId("fix-review-custom-input").fill("Stanford Scholarship");
+    const response = page.waitForResponse(
+      (r) => r.request().method() === "POST" && isDemoFixPost(r.url()),
+      { timeout: 60_000 },
+    );
+    await page.getByTestId("fix-review-use-custom").click();
+    await response;
+
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "2");
+    await expect(page.getByTestId("demo-applied-fix")).toBeVisible();
+    await expect(page.getByText(/Issue still needs attention/i)).toBeVisible();
+    await expect(page.getByText("Stanford Scholarship").first()).toBeVisible();
+
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+    await expect(page.getByTestId("fix-review-dialog")).toContainText(
+      "Stanford Scholarship",
+    );
+  });
+
+  test("custom correct organization advances and evidence shows visitor marker", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await startDemo(page);
+    await advanceToStep(page, 2);
+    await page.getByTestId("demo-review-fix").click();
+    await page
+      .getByTestId("fix-review-custom-input")
+      .fill("Future Engineers Scholarship");
+    const response = page.waitForResponse(
+      (r) => r.request().method() === "POST" && isDemoFixPost(r.url()),
+      { timeout: 60_000 },
+    );
+    await page.getByTestId("fix-review-use-custom").click();
+    await response;
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "3");
+    await expect(page.getByText(/Issue resolved/i)).toBeVisible();
+
+    await page.getByTestId("demo-applied-fix").getByRole("link", { name: "View evidence" }).click();
+    await expect(page.getByTestId("application-detail")).toBeVisible({ timeout: 60_000 });
+    await page.getByRole("tab", { name: "Activity" }).click();
+    await expect(page.getByTestId("visitor-demo-edit-marker").first()).toBeVisible();
+    await expect(page.getByText(/Future Engineers Scholarship/i).first()).toBeVisible();
+  });
+
+  test("double-click Review apply only mutates once", async ({ page }) => {
+    await page.goto("/demo");
+    await startDemo(page);
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+
+    let fixPosts = 0;
+    page.on("request", (req) => {
+      if (req.method() === "POST" && isDemoFixPost(req.url())) {
+        fixPosts += 1;
+      }
+    });
+
+    const btn = page.getByTestId("fix-review-use-suggested");
+    await btn.evaluate((el) => {
+      const button = el as HTMLButtonElement;
+      button.click();
+      button.click();
+    });
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "1", {
+      timeout: 60_000,
+    });
+    expect(fixPosts).toBe(1);
+  });
+
+  test("mobile review dialog fits without document overflow", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/demo");
+    await startDemo(page);
+    await advanceToStep(page, 2);
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+    await expect(page.getByTestId("fix-review-use-suggested")).toBeVisible();
+    await expect(page.getByTestId("fix-review-keep-current")).toBeVisible();
+    const overflow = await page.evaluate(() => {
+      const dialog = document.querySelector('[data-testid="fix-review-dialog"]');
+      if (!dialog) return { page: 99, dialog: 99 };
+      const pageOverflow =
+        document.documentElement.scrollWidth - document.documentElement.clientWidth;
+      const style = window.getComputedStyle(dialog);
+      return {
+        page: pageOverflow,
+        dialogScroll: (dialog as HTMLElement).scrollWidth - (dialog as HTMLElement).clientWidth,
+        maxHeight: style.maxHeight,
+      };
+    });
+    expect(overflow.page).toBeLessThanOrEqual(1);
+    expect(overflow.dialogScroll).toBeLessThanOrEqual(2);
+  });
+
+  test("Escape and backdrop cannot dismiss review dialog while mutation is pending", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await startDemo(page);
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+
+    await page.route("**/api/demo/*/fix", async (route) => {
+      if (route.request().method() !== "POST" || !isDemoFixPost(route.request().url())) {
+        await route.continue();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+      await route.continue();
+    });
+
+    let fixPosts = 0;
+    page.on("request", (req) => {
+      if (req.method() === "POST" && isDemoFixPost(req.url())) fixPosts += 1;
+    });
+
+    const pending = page.waitForResponse(
+      (r) => r.request().method() === "POST" && isDemoFixPost(r.url()),
+      { timeout: 60_000 },
+    );
+    await page.getByTestId("fix-review-use-suggested").evaluate((el) =>
+      (el as HTMLButtonElement).click(),
+    );
+    await expect(page.getByTestId("fix-review-dialog")).toHaveAttribute(
+      "data-busy",
+      "true",
+    );
+    await page.keyboard.press("Escape");
+    await page.getByTestId("fix-review-backdrop").click({ force: true });
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+    await pending;
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "1", {
+      timeout: 60_000,
+    });
+    expect(fixPosts).toBe(1);
+  });
+
+  test("invalid custom email stays unresolved and preview keeps literal current value", async ({
+    page,
+  }) => {
+    await page.goto("/demo");
+    await startDemo(page);
+    await advanceToStep(page, 3);
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toBeVisible();
+    await page.getByTestId("fix-review-custom-input").fill("not-an-email");
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.request().method() === "POST" && isDemoFixPost(r.url()),
+        { timeout: 60_000 },
+      ),
+      page.getByTestId("fix-review-use-custom").click(),
+    ]);
+    await expect(page.getByTestId("demo-page")).toHaveAttribute("data-demo-step", "3");
+    await expect(page.getByTestId("demo-applied-fix")).toContainText(
+      /No valid email detected/i,
+    );
+    await page.getByTestId("demo-review-fix").click();
+    await expect(page.getByTestId("fix-review-dialog")).toContainText("not-an-email");
+    await expect(page.getByTestId("fix-review-dialog")).not.toContainText(
+      "alex.old.email@example.com",
+    );
+  });
+
+  test("privacy route discloses temporary custom demo edits", async ({ page }) => {
+    await page.goto("/privacy");
+    await expect(
+      page.getByRole("heading", { name: /Privacy/i }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByText(/temporarily processed inside the generated fictional packet/i)
+        .first(),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Do not enter personal or sensitive information/i).first(),
+    ).toBeVisible();
   });
 });

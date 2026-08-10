@@ -136,8 +136,8 @@ describe("public demo mode security and concurrency", () => {
 
     const advance = await request(publicApp)
       .post(`/api/demo/${nonDemoId}/advance`)
-      .expect(400);
-    expect(advance.body.error?.code).toBe("NOT_DEMO");
+      .expect(403);
+    expectPublicDemoOnly(advance.body);
   });
 
   it("allows guided-demo endpoints and reaches ready", async () => {
@@ -331,9 +331,24 @@ describe("public demo mode security and concurrency", () => {
 
     const missing = await request(app)
       .post("/api/demo/00000000-0000-4000-8000-000000000000/advance")
-      .expect(404);
-    expect(missing.body.error?.code).toBe("NOT_FOUND");
+      .expect(403);
+    expectPublicDemoOnly(missing.body);
     expect(JSON.stringify(missing.body)).not.toMatch(/\/Users\/|\/home\/|\\\\/);
+  });
+
+  it("blocks public /advance while allowing /fix", async () => {
+    const app = ctx.app();
+    const started = await request(app).post("/api/demo/start").expect(201);
+    const id = started.body.application.id as string;
+    expectPublicDemoOnly(
+      (await request(app).post(`/api/demo/${id}/advance`).expect(403)).body,
+    );
+    const fixed = await request(app)
+      .post(`/api/demo/${id}/fix`)
+      .send({ mode: "suggested" })
+      .expect(200);
+    expect(fixed.body.application.demoStep).toBe(1);
+    expect(fixed.body.advanced).toBe(true);
   });
 
   it("public export omits storage filenames", async () => {
