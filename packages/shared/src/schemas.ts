@@ -155,3 +155,7 @@ export const mergeRequirementsSchema = z.object({
   keepId: z.string().uuid(),
   mergeId: z.string().uuid(),
 });
+
+export const setDemoStepSchema = z.object({
+  step: z.number().int().min(0).max(6),
+});

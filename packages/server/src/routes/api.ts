@@ -10,6 +10,7 @@ import {
   mergeRequirementsSchema,
   pastedSourceSchema,
   resolveConflictSchema,
+  setDemoStepSchema,
   updateApplicationSchema,
   updateIssueSchema,
   updateMatchSchema,
@@ -47,6 +48,7 @@ import {
   applySuggestedDemoFix,
   DEMO_STEPS,
   resetGuidedDemo,
+  setGuidedDemoStep,
   startGuidedDemo,
 } from "../services/demo/demo.js";
 import { computeReadiness } from "../services/readiness/score.js";
@@ -702,6 +704,15 @@ export function createApiRouter(db: Database.Database): Router {
     "/demo/:id/reset",
     asyncHandler(async (req, res) => {
       const result = await resetGuidedDemo(db, req.params.id!);
+      res.json({ ...result, steps: DEMO_STEPS });
+    }),
+  );
+
+  router.post(
+    "/demo/:id/step",
+    asyncHandler(async (req, res) => {
+      const body = setDemoStepSchema.parse(req.body);
+      const result = await setGuidedDemoStep(db, req.params.id!, body.step);
       res.json({ ...result, steps: DEMO_STEPS });
     }),
   );
