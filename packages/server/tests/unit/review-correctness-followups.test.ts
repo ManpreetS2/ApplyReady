@@ -10,6 +10,7 @@ import { isGlobalUnicastIp, isPrivateIp } from "../../src/services/net/privateIp
 import {
   advanceGuidedDemo,
   resetGuidedDemo,
+  setDemoReplaceTestHooks,
   setDemoResetTestHooks,
   startGuidedDemo,
 } from "../../src/services/demo/demo.js";
@@ -19,6 +20,43 @@ const ctx = useTempDb();
 
 afterEach(() => {
   setDemoResetTestHooks(null);
+  setDemoReplaceTestHooks(null);
+});
+
+describe("review fixes — demo replace failure safety", () => {
+  it("keeps the prior category document when staged replacement fails before swap", async () => {
+    const db = ctx.db();
+    const repos = new Repositories(db);
+    const started = await startGuidedDemo(db);
+    const id = started.application!.id;
+
+    // Advance once (add transcript) so the next step performs a category replace.
+    await advanceGuidedDemo(db, id);
+    expect(repos.getApplication(id)!.demoStep).toBe(1);
+
+    const beforeEssays = repos
+      .listDocuments(id)
+      .filter((d) => d.category === "essay");
+    expect(beforeEssays.length).toBe(1);
+    const beforeEssay = beforeEssays[0]!;
+    const beforeStored = beforeEssay.storedFilename;
+    const beforeText = repos.getDocumentText(beforeEssay.id);
+    expect(fs.existsSync(resolveUploadPath("applications", beforeStored))).toBe(true);
+    expect(beforeText).toBeTruthy();
+
+    setDemoReplaceTestHooks({ failAfter: "before_swap" });
+    await expect(advanceGuidedDemo(db, id)).rejects.toThrow(
+      /Injected demo replace failure before swap/,
+    );
+
+    const after = repos.getApplication(id)!;
+    expect(after.demoStep).toBe(1);
+    const afterEssays = repos.listDocuments(id).filter((d) => d.category === "essay");
+    expect(afterEssays.map((d) => d.id)).toEqual([beforeEssay.id]);
+    expect(fs.existsSync(resolveUploadPath("applications", beforeStored))).toBe(true);
+    expect(repos.getDocumentText(beforeEssay.id)).toBe(beforeText);
+    expect(repos.listApplications().filter((a) => a.id !== id)).toHaveLength(0);
+  });
 });
 
 describe("review fixes — demo reset failure safety", () => {
