@@ -159,3 +159,13 @@ export const mergeRequirementsSchema = z.object({
 export const setDemoStepSchema = z.object({
   step: z.number().int().min(0).max(6),
 });
+
+export const applyDemoFixSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("suggested"),
+  }),
+  z.object({
+    mode: z.literal("custom"),
+    value: z.string().min(1).max(254),
+  }),
+]);

@@ -323,6 +323,58 @@ export interface ApplicationExport {
   generatedAt: string;
 }
 
+export type DemoFixKind =
+  | "add_document"
+  | "replace_text"
+  | "replace_filename"
+  | "finalize";
+
+export type DemoFixField =
+  | "scholarship_reference"
+  | "organization"
+  | "email"
+  | "filename"
+  | null;
+
+export interface DemoFixPreview {
+  step: number;
+  title: string;
+  explanation: string;
+  kind: DemoFixKind;
+  documentCategory:
+    | "transcript"
+    | "essay"
+    | "recommendation"
+    | "resume"
+    | "combined_packet"
+    | null;
+  field: DemoFixField;
+  currentValue: string | null;
+  suggestedValue: string | null;
+  contextBefore: string | null;
+  contextAfter: string | null;
+  editable: boolean;
+  maxLength: number | null;
+  requirementEvidence: string[];
+  detectedEvidence: string[];
+}
+
+export interface DemoAppliedFix {
+  mode: "suggested" | "custom";
+  field: DemoFixField;
+  requestedValue: string | null;
+  extractedValue: string | null;
+  resolved: boolean;
+}
+
+export interface DemoStepInfo {
+  step: number;
+  title: string;
+  summary: string;
+  nextAction: string | null;
+  shortLabel: string;
+}
+
 export interface ApiError {
   error: {
     code: string;
