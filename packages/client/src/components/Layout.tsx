@@ -38,18 +38,18 @@ export function Layout() {
       >
         Skip to content
       </a>
-      {publicDemoMode ? (
-        <div
-          className="border-b border-[var(--line)] bg-accent-950/40 px-4 py-2 text-center text-sm text-ink-100"
-          role="status"
-        >
-          Public portfolio demo — all names and documents are fictional. Real uploads are
-          disabled.
-        </div>
-      ) : null}
       <header className="no-print sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--bg)]">
+        {publicDemoMode ? (
+          <p
+            className="border-b border-[var(--line)] px-4 py-1.5 text-center text-xs text-ink-300"
+            role="status"
+          >
+            Public portfolio demo — all names and documents are fictional. Real uploads are
+            disabled.
+          </p>
+        ) : null}
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <Link to="/" className="group flex items-baseline gap-2">
+          <Link to="/" className="group flex min-w-0 items-baseline gap-2">
             <span className="font-display text-2xl font-semibold tracking-tight text-ink-950 dark:text-ink-50">
               ApplyReady
             </span>

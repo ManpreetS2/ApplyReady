@@ -22,6 +22,8 @@ import { withDemoLock } from "./lock.js";
 
 /** Test-only: force a failure during staged demo reset initialization. */
 let resetFailAfter: "ingest" | "seed" | "analyze" | "before_swap" | null = null;
+/** Test-only: force a failure during staged category document replacement. */
+let replaceFailAfter: "before_swap" | null = null;
 
 export function setDemoResetTestHooks(
   hooks: {
@@ -34,42 +36,58 @@ export function setDemoResetTestHooks(
   resetFailAfter = hooks?.failAfter ?? null;
 }
 
+export function setDemoReplaceTestHooks(
+  hooks: {
+    failAfter?: "before_swap" | null;
+  } | null,
+): void {
+  if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
+    throw new Error("setDemoReplaceTestHooks is only available in tests");
+  }
+  replaceFailAfter = hooks?.failAfter ?? null;
+}
+
 export const DEMO_STEPS = [
   {
     step: 0,
     title: "Initial packet review",
     summary:
-      "The demo starts Not ready: transcript missing, essay too long, wrong organization references, outdated email, and incorrect packet filename.",
+      "The starting fictional packet has several intentional problems. Review the evidence, then apply the suggested fixes one at a time.",
   },
   {
     step: 1,
     title: "Add unofficial transcript",
-    summary: "Upload the missing transcript and reanalyze.",
+    summary:
+      "Apply the suggested fix to add a fictional unofficial transcript and review the updated readiness.",
   },
   {
     step: 2,
     title: "Fix essay length and organization reference",
-    summary: "Replace the essay with a 400–500 word version for Future Engineers Scholarship.",
+    summary:
+      "Swap in the corrected fictional 400–500 word essay for Future Engineers Scholarship.",
   },
   {
     step: 3,
     title: "Fix recommendation letter",
-    summary: "Replace the recommendation so it addresses Future Engineers Scholarship.",
+    summary:
+      "Swap in the corrected fictional recommendation addressed to Future Engineers Scholarship.",
   },
   {
     step: 4,
     title: "Update resume email",
-    summary: "Replace the resume that still uses an outdated email address.",
+    summary: "Replace the fictional resume with the corrected email version.",
   },
   {
     step: 5,
     title: "Rename combined packet",
-    summary: "Upload a correctly named Chen_Alex_2026.pdf packet and confirm matches.",
+    summary:
+      "Replace the fictional combined packet with the correctly named Chen_Alex_2026.pdf.",
   },
   {
     step: 6,
     title: "Ready to submit",
-    summary: "All required items verified. Ready to submit.",
+    summary:
+      "All required items are verified. The fictional packet is Ready to submit.",
   },
 ] as const;
 
@@ -353,9 +371,9 @@ async function advanceGuidedDemoUnlocked(db: Database.Database, applicationId: s
   }
 
   if (next === 2) {
-    await replaceCategoryDoc(db, applicationId, "essay", async () => {
+    await replaceCategoryDoc(db, applicationId, "essay", async (targetId) => {
       await processUploadedDocument(db, {
-        applicationId,
+        applicationId: targetId,
         buffer: await buildDemoEssayPdf(false),
         originalFilename: "Essay_Alex_Chen.pdf",
         mimeType: "application/pdf",
@@ -365,9 +383,9 @@ async function advanceGuidedDemoUnlocked(db: Database.Database, applicationId: s
   }
 
   if (next === 3) {
-    await replaceCategoryDoc(db, applicationId, "recommendation", async () => {
+    await replaceCategoryDoc(db, applicationId, "recommendation", async (targetId) => {
       await processUploadedDocument(db, {
-        applicationId,
+        applicationId: targetId,
         buffer: await buildDemoRecommendationPdf(false),
         originalFilename: "Recommendation_Letter.pdf",
         mimeType: "application/pdf",
@@ -377,9 +395,9 @@ async function advanceGuidedDemoUnlocked(db: Database.Database, applicationId: s
   }
 
   if (next === 4) {
-    await replaceCategoryDoc(db, applicationId, "resume", async () => {
+    await replaceCategoryDoc(db, applicationId, "resume", async (targetId) => {
       await processUploadedDocument(db, {
-        applicationId,
+        applicationId: targetId,
         buffer: await buildDemoResumePdf(false),
         originalFilename: "Alex_Chen_Resume.pdf",
         mimeType: "application/pdf",
@@ -389,10 +407,10 @@ async function advanceGuidedDemoUnlocked(db: Database.Database, applicationId: s
   }
 
   if (next === 5) {
-    await replaceCategoryDoc(db, applicationId, "combined_packet", async () => {
+    await replaceCategoryDoc(db, applicationId, "combined_packet", async (targetId) => {
       const packet = await buildDemoPacketPdf(true);
       await processUploadedDocument(db, {
-        applicationId,
+        applicationId: targetId,
         buffer: packet.buffer,
         originalFilename: packet.filename,
         mimeType: "application/pdf",
@@ -455,17 +473,87 @@ async function replaceCategoryDoc(
   db: Database.Database,
   applicationId: string,
   category: string,
-  upload: () => Promise<void>,
+  upload: (targetApplicationId: string) => Promise<void>,
 ) {
   const repos = new Repositories(db);
   const existing = repos
     .listDocuments(applicationId)
     .filter((d) => d.category === category);
-  for (const doc of existing) {
-    repos.deleteDocument(doc.id);
-    deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
+
+  // Stage the replacement under a temporary application so a failed process
+  // never deletes the currently valid demo document.
+  const staging = repos.createApplication({
+    name: "Demo document staging",
+    organization: "Demo document staging",
+    type: "scholarship",
+    notes: "Temporary guided-demo replacement staging",
+    isDemo: false,
+    demoStep: 0,
+  });
+
+  let stagedDocs: ReturnType<Repositories["listDocuments"]> = [];
+  try {
+    await upload(staging.id);
+    stagedDocs = repos.listDocuments(staging.id);
+    if (stagedDocs.length === 0) {
+      throw new Error("Guided demo replacement produced no document");
+    }
+    if (replaceFailAfter === "before_swap") {
+      throw new Error("Injected demo replace failure before swap");
+    }
+
+    withTransaction(db, () => {
+      for (const doc of existing) {
+        repos.deleteDocument(doc.id);
+      }
+      db.prepare(
+        "UPDATE documents SET application_id=? WHERE application_id=?",
+      ).run(applicationId, staging.id);
+      db.prepare("DELETE FROM activity_events WHERE application_id=?").run(
+        staging.id,
+      );
+      db.prepare("DELETE FROM applicant_profiles WHERE application_id=?").run(
+        staging.id,
+      );
+      db.prepare("DELETE FROM applications WHERE id=?").run(staging.id);
+    });
+  } catch (error) {
+    try {
+      if (repos.getApplication(staging.id)) {
+        await destroyDemoApplication(db, staging.id);
+      } else {
+        const liveStored = new Set(
+          repos.listDocuments(applicationId).map((d) => d.storedFilename),
+        );
+        for (const doc of stagedDocs) {
+          if (!liveStored.has(doc.storedFilename)) {
+            deleteFileQuietly(
+              resolveUploadPath("applications", doc.storedFilename),
+            );
+          }
+        }
+      }
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error ? cleanupError.message : "unknown error";
+      console.error(
+        `[applyready] demo replace staging cleanup failed: ${message}`,
+      );
+    }
+    throw error;
   }
-  await upload();
+
+  for (const doc of existing) {
+    try {
+      deleteFileQuietly(resolveUploadPath("applications", doc.storedFilename));
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error ? cleanupError.message : "unknown error";
+      console.error(
+        `[applyready] demo replace old-file cleanup failed: ${message}`,
+      );
+    }
+  }
 }
 
 export async function resetGuidedDemo(db: Database.Database, applicationId: string) {
