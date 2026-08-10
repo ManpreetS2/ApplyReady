@@ -25,6 +25,12 @@ describe("public demo path normalization", () => {
   it("allowlists only the guided-demo surface", () => {
     expect(isPublicDemoAllowedRoute("GET", "/health")).toBe(true);
     expect(isPublicDemoAllowedRoute("POST", "/demo/start")).toBe(true);
+    expect(
+      isPublicDemoAllowedRoute(
+        "POST",
+        "/demo/00000000-0000-4000-8000-000000000001/step",
+      ),
+    ).toBe(true);
     expect(isPublicDemoAllowedRoute("GET", "/vault")).toBe(false);
     expect(isPublicDemoAllowedRoute("POST", "/applications")).toBe(false);
     expect(isPublicDemoAllowedRoute("DELETE", "/settings/clear-all")).toBe(false);
