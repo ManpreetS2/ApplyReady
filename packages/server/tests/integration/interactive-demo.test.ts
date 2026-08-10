@@ -163,15 +163,81 @@ describe("interactive guided demo", () => {
 
     const detail = await request(app).get(`/api/applications/${id}`).expect(200);
     const activity = detail.body.activity as Array<{
-      metadata?: { demoEdit?: boolean; extractedValue?: string };
+      metadata?: Record<string, unknown> | null;
     }>;
+    const demoEdit = activity.find((e) => e.metadata?.demoEdit === true);
+    expect(demoEdit?.metadata).toMatchObject({
+      demoEdit: true,
+      mode: "custom",
+      field: "email",
+      resolved: false,
+    });
+    expect(demoEdit?.metadata).not.toHaveProperty("requestedValue");
+    expect(demoEdit?.metadata).not.toHaveProperty("extractedValue");
+  });
+
+  it("keeps invalid custom email as document current value without fabricating extraction", async () => {
+    const app = ctx.app();
+    const id = await start(app);
+    await advanceTo(app, id, 3);
+
+    const custom = await request(app)
+      .post(`/api/demo/${id}/fix`)
+      .send({ mode: "custom", value: "not-an-email" })
+      .expect(200);
+
+    expect(custom.body.application.demoStep).toBe(3);
+    expect(custom.body.advanced).toBe(false);
+    expect(custom.body.appliedFix.requestedValue).toBe("not-an-email");
+    expect(custom.body.appliedFix.extractedValue).toBeNull();
+    expect(custom.body.appliedFix.resolved).toBe(false);
+
+    const detail = await request(app).get(`/api/applications/${id}`).expect(200);
+    const resume = (
+      detail.body.documents as Array<{ category: string; id: string }>
+    ).find((d) => d.category === "resume");
+    expect(resume).toBeTruthy();
+    // Document text is not always exposed on detail; re-check via preview.
+    const preview = await request(app).get(`/api/demo/${id}/fix-preview`).expect(200);
+    expect(preview.body.preview.currentValue).toBe("not-an-email");
+    expect(preview.body.preview.extractedValue).toBeNull();
+    expect(preview.body.preview.suggestedValue).toBe(DEMO_SUGGESTED.email);
+    expect(preview.body.preview.currentValue).not.toBe(DEMO_SUGGESTED.badEmail);
+  });
+
+  it("requires guidedConditionSatisfied for suggested fixes and every step 0-5 advances", async () => {
+    const app = ctx.app();
+    const id = await start(app);
+    for (let step = 0; step < 6; step += 1) {
+      const before = await request(app).get(`/api/applications/${id}`).expect(200);
+      expect(before.body.application.demoStep).toBe(step);
+      const fixed = await fixSuggested(app, id);
+      expect(fixed.body.advanced).toBe(true);
+      expect(fixed.body.appliedFix.resolved).toBe(true);
+      expect(fixed.body.application.demoStep).toBe(step + 1);
+    }
     expect(
-      activity.some(
-        (e) =>
-          e.metadata?.demoEdit === true &&
-          e.metadata.extractedValue === "visitor@example.com",
-      ),
-    ).toBe(true);
+      (await request(app).get(`/api/applications/${id}`).expect(200)).body.application
+        .readinessStatus,
+    ).toBe("ready");
+  });
+
+  it("does not advance suggested fix when guided condition is forced unmet", async () => {
+    const { setDemoFixTestHooks } = await import("../../src/services/demo/demo.js");
+    const app = ctx.app();
+    const id = await start(app);
+    setDemoFixTestHooks({ forceUnresolvedFor: id });
+    try {
+      const fixed = await request(app)
+        .post(`/api/demo/${id}/fix`)
+        .send({ mode: "suggested" })
+        .expect(200);
+      expect(fixed.body.advanced).toBe(false);
+      expect(fixed.body.appliedFix.resolved).toBe(false);
+      expect(fixed.body.application.demoStep).toBe(0);
+    } finally {
+      setDemoFixTestHooks(null);
+    }
   });
 
   it("keeps step on wrong custom filename and rejects path traversal", async () => {
@@ -257,5 +323,12 @@ describe("interactive guided demo", () => {
     expect(detailA.body.application.demoStep).toBe(2);
     expect(detailB.body.application.demoStep).toBe(2);
     expect(detailA.body.application.id).not.toBe(detailB.body.application.id);
+  });
+
+  it("keeps local-mode /advance available for compatibility", async () => {
+    const app = ctx.app();
+    const id = await start(app);
+    const advanced = await request(app).post(`/api/demo/${id}/advance`).expect(200);
+    expect(advanced.body.application.demoStep).toBe(1);
   });
 });
