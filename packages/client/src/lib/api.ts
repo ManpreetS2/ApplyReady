@@ -257,7 +257,12 @@ export const api = {
         shortLabel: string;
       }>;
     }>("/api/demo/start", { method: "POST" }),
-  advanceDemo: (id: string) =>
+  fixDemo: (
+    id: string,
+    body: { mode: "suggested" } | { mode: "custom"; value: string } = {
+      mode: "suggested",
+    },
+  ) =>
     request<{
       application: Application;
       analysis: { report: ReadinessReport; issues: Issue[] };
@@ -269,20 +274,23 @@ export const api = {
         shortLabel: string;
       };
       done?: boolean;
-    }>(`/api/demo/${id}/advance`, { method: "POST" }),
-  fixDemo: (id: string) =>
-    request<{
-      application: Application;
-      analysis: { report: ReadinessReport; issues: Issue[] };
-      step: {
-        step: number;
-        title: string;
-        summary: string;
-        nextAction: string | null;
-        shortLabel: string;
+      advanced?: boolean;
+      appliedFix?: {
+        mode: "suggested" | "custom";
+        field: string | null;
+        requestedValue: string | null;
+        extractedValue: string | null;
+        resolved: boolean;
       };
-      done?: boolean;
-    }>(`/api/demo/${id}/fix`, { method: "POST" }),
+    }>(`/api/demo/${id}/fix`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  demoFixPreview: (id: string) =>
+    request<{
+      preview: import("@applyready/shared").DemoFixPreview;
+    }>(`/api/demo/${id}/fix-preview`),
   resetDemo: (id: string) =>
     request<{
       application: Application;

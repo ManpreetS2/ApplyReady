@@ -52,7 +52,6 @@ export const PUBLIC_DEMO_ALLOWED_ROUTES: RouteRule[] = [
   { method: "GET", pattern: /^\/config\/?$/ },
   { method: "GET", pattern: /^\/demo\/steps\/?$/ },
   { method: "POST", pattern: /^\/demo\/start\/?$/ },
-  { method: "POST", pattern: /^\/demo\/[^/]+\/advance\/?$/ },
   { method: "POST", pattern: /^\/demo\/[^/]+\/fix\/?$/ },
   { method: "POST", pattern: /^\/demo\/[^/]+\/reset\/?$/ },
   { method: "POST", pattern: /^\/demo\/[^/]+\/step\/?$/ },
