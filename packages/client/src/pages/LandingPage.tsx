@@ -7,11 +7,12 @@ export function LandingPage() {
 
   return (
     <div className="space-y-16">
-      <section className="relative overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[linear-gradient(160deg,rgba(255,255,255,0.82),rgba(243,236,225,0.9))] px-6 py-14 shadow-soft dark:bg-[linear-gradient(160deg,rgba(38,52,48,0.9),rgba(19,28,25,0.95))] sm:px-12">
+      <section className="relative overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[linear-gradient(165deg,#ffffff_0%,#f1f5f9_100%)] px-6 py-14 shadow-soft dark:bg-[linear-gradient(165deg,#121821_0%,#0b0f14_100%)] sm:px-12">
         <div
-          className="pointer-events-none absolute inset-0 bg-grid-faint bg-[size:28px_28px] opacity-60 dark:opacity-20"
+          className="pointer-events-none absolute inset-0 bg-grid-faint bg-[size:28px_28px] opacity-40 dark:opacity-25"
           aria-hidden
         />
+        <div className="pointer-events-none absolute -right-16 top-10 h-56 w-56 rounded-full bg-slate-400/10 blur-3xl dark:bg-[#38BDF8]/08" aria-hidden />
         <div className="relative max-w-3xl">
           <p className="font-display text-5xl font-semibold tracking-tight text-ink-950 dark:text-ink-50 sm:text-6xl">
             ApplyReady
