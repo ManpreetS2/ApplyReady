@@ -15,6 +15,12 @@ describe("guided demo", () => {
       started.body.analysis.issues.map((i: { code: string }) => i.code),
     );
     expect(initialCodes.has("MISSING_DOCUMENT")).toBe(true);
+    const missing = started.body.analysis.issues.find(
+      (i: { code: string }) => i.code === "MISSING_DOCUMENT",
+    );
+    expect(missing?.explanation).toMatch(/^No document was matched to the required item/);
+    expect(missing?.explanation).not.toMatch(/uploaded/i);
+    expect(missing?.evidence).toMatch(/^Future Engineers/);
 
     let current = started;
     for (let i = 0; i < 6; i += 1) {

@@ -313,12 +313,12 @@ export function analyzeApplication(db: Database.Database, applicationId: string)
           explanation:
             minCount > 1 || qualifyingDocs.length > 0
               ? `This requirement needs ${minCount} distinct qualifying documents; found ${qualifyingDocs.length}.`
-              : `No uploaded document was matched to the required item "${requirement.title}".`,
+              : `No document was matched to the required item "${requirement.title}".`,
           evidence: requirement.sourceEvidence,
           recommendedFix:
             minCount > 1 || qualifyingDocs.length > 0
-              ? `Upload ${minCount} distinct ${requirement.category.replaceAll("_", " ")} documents, or assign existing ones.`
-              : `Upload a ${requirement.category.replaceAll("_", " ")} that satisfies this requirement, or manually assign an existing document.`,
+              ? `Add ${minCount} distinct ${requirement.category.replaceAll("_", " ")} documents, or assign existing ones.`
+              : `Add a ${requirement.category.replaceAll("_", " ")} that satisfies this requirement, or manually assign an existing document.`,
           status: "open",
           dismissible: false,
         });
@@ -705,7 +705,7 @@ function fixFor(rule: string): string {
     case "organization_reference":
       return "Update the document so it references the correct organization.";
     case "accepted_extension":
-      return "Export/upload the document in an accepted file format.";
+      return "Provide the document in an accepted file format.";
     case "low_text_pdf":
       return "Provide a searchable PDF (OCR is not included in this version).";
     case "signature_text":
@@ -799,7 +799,7 @@ function validateEligibilityRequirement(
       if (unique.length === 0) {
         unresolved = true;
         message =
-          "No GPA value was found in a confirmed profile field or uploaded documents.";
+          "No GPA value was found in a confirmed profile field or application documents.";
       } else if (unique.length > 1) {
         const spread =
           Math.max(...unique.map((g) => g.value)) -
@@ -911,7 +911,7 @@ function validateEligibilityRequirement(
       passed = true;
       severity = "suggestion";
       message =
-        "Explicit enrollment evidence was found in uploaded materials.";
+        "Explicit enrollment evidence was found in application materials.";
     } else if (
       profile &&
       profileFieldConfirmed(profile, "currentlyEnrolled") &&
