@@ -310,6 +310,19 @@ export interface ReadinessReport {
   generatedAt: string;
 }
 
+/** Payload from GET /api/applications/:id/export (public-demo may omit storedFilename). */
+export interface ApplicationExport {
+  application: Application;
+  requirements: Requirement[];
+  documents: Array<Omit<DocumentRecord, "storedFilename"> & { storedFilename?: string }>;
+  matches: DocumentMatch[];
+  issues: Issue[];
+  conflicts: ProfileConflict[];
+  validations: ValidationResult[];
+  readiness: ReadinessReport;
+  generatedAt: string;
+}
+
 export interface ApiError {
   error: {
     code: string;
