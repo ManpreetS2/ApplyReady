@@ -10,6 +10,9 @@ type FixReviewDialogProps = {
   onKeepCurrent: () => void;
 };
 
+const PRIVACY_HINT =
+  "Use fictional or example values only. Custom demo edits are temporarily processed inside the generated fictional packet and are automatically removed with the demo. Do not enter personal or sensitive information.";
+
 function DiffBlock({
   label,
   before,
@@ -21,12 +24,14 @@ function DiffBlock({
   before: string | null;
   value: string | null;
   after: string | null;
-  tone: "current" | "suggested";
+  tone: "current" | "suggested" | "muted";
 }) {
   const highlight =
     tone === "current"
       ? "rounded px-0.5 bg-amber-500/25 text-amber-100"
-      : "rounded px-0.5 bg-sky-400/25 text-sky-100";
+      : tone === "suggested"
+        ? "rounded px-0.5 bg-sky-400/25 text-sky-100"
+        : "rounded px-0.5 text-ink-200";
   return (
     <div className="rounded-xl border border-[var(--line)] bg-ink-950/40 p-3">
       <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">
@@ -54,14 +59,12 @@ export function FixReviewDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const primaryRef = useRef<HTMLButtonElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  const busyRef = useRef(busy);
   const onKeepCurrentRef = useRef(onKeepCurrent);
-  const onUseSuggestedRef = useRef(onUseSuggested);
-  const onUseCustomRef = useRef(onUseCustom);
   const [draft, setDraft] = useState("");
 
+  busyRef.current = busy;
   onKeepCurrentRef.current = onKeepCurrent;
-  onUseSuggestedRef.current = onUseSuggested;
-  onUseCustomRef.current = onUseCustom;
 
   useEffect(() => {
     if (!open || !preview) return;
@@ -74,6 +77,7 @@ export function FixReviewDialog({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (busyRef.current) return;
         onKeepCurrentRef.current();
         return;
       }
@@ -120,13 +124,24 @@ export function FixReviewDialog({
         ? "Finalize readiness"
         : "Use suggested change";
 
+  const extractedLabel =
+    preview.extractedValue ??
+    (preview.field === "email"
+      ? "Not recognized as a valid email"
+      : "Not recognized");
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-3 sm:items-center sm:p-4">
       <button
         type="button"
         className="absolute inset-0 bg-ink-950/55"
         aria-label="Dismiss dialog"
-        onClick={onKeepCurrent}
+        disabled={busy}
+        data-testid="fix-review-backdrop"
+        onClick={() => {
+          if (busyRef.current) return;
+          onKeepCurrent();
+        }}
       />
       <div
         ref={dialogRef}
@@ -135,6 +150,7 @@ export function FixReviewDialog({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         data-testid="fix-review-dialog"
+        data-busy={busy ? "true" : "false"}
         className="relative z-10 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[var(--line)] bg-[var(--card)] p-5 shadow-soft sm:p-6"
       >
         <h2 id={titleId} className="font-display text-2xl font-semibold">
@@ -166,12 +182,18 @@ export function FixReviewDialog({
         {preview.kind !== "finalize" && preview.kind !== "add_document" ? (
           <div className="mt-5 grid gap-3">
             <DiffBlock
-              label="Current version"
+              label="Current document value"
               before={preview.contextBefore}
               value={preview.currentValue}
               after={preview.contextAfter}
               tone="current"
             />
+            <div className="rounded-xl border border-[var(--line)] bg-ink-950/40 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+                ApplyReady extracted
+              </p>
+              <p className="mt-2 break-words text-sm text-ink-200">{extractedLabel}</p>
+            </div>
             <DiffBlock
               label="Suggested change"
               before={preview.contextBefore}
@@ -215,6 +237,9 @@ export function FixReviewDialog({
               onChange={(e) => setDraft(e.target.value)}
               disabled={busy}
             />
+            <span className="mt-2 block text-xs leading-relaxed text-ink-400">
+              {PRIVACY_HINT}
+            </span>
           </label>
         ) : null}
 
@@ -247,7 +272,10 @@ export function FixReviewDialog({
             className="btn-ghost"
             disabled={busy}
             data-testid="fix-review-keep-current"
-            onClick={onKeepCurrent}
+            onClick={() => {
+              if (busyRef.current) return;
+              onKeepCurrent();
+            }}
           >
             Keep current version
           </button>

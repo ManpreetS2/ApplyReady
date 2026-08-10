@@ -112,7 +112,7 @@ export function createApiRouter(db: Database.Database): Router {
       res.json({
         publicDemoMode: true,
         privacy:
-          "This hosted portfolio demo uses generated fictional documents only. Real uploads are disabled. Demo data is temporary and automatically removed. No account is created.",
+          "This hosted portfolio demo uses generated fictional documents and optional temporary visitor-provided fictional scalar edits. Use fictional or example values only. Custom demo edits are processed inside the generated fictional packet and automatically removed with the demo. Real uploads are disabled. No account is created.",
       });
       return;
     }

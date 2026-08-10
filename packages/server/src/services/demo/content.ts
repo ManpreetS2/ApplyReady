@@ -80,7 +80,9 @@ export async function buildDemoResumePdf(
     (useBad ? DEMO_SUGGESTED.badEmail : DEMO_SUGGESTED.email);
   return buildSimplePdf([
     "Alex Chen",
-    email,
+    // Stable labeled contact line so preview can recover literal visitor values
+    // even when they are not syntactically valid emails.
+    `Email: ${email}`,
     "(408) 555-0142",
     "De Anza College",
     "Major: Computer Science",

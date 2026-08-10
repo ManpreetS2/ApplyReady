@@ -63,7 +63,7 @@ export function LandingPage() {
             icon: Lock,
             title: publicDemoMode ? "Demo by design" : "Local by design",
             body: publicDemoMode
-              ? "This hosted demo uses generated fictional documents only. Real uploads, vault storage, and arbitrary URL fetching are disabled."
+              ? "This hosted demo uses generated fictional documents plus optional temporary fictional scalar edits. Real uploads, vault storage, and arbitrary URL fetching are disabled."
               : "Files stay on the machine running ApplyReady—local SQLite and uploads, not hosted AI or cloud sync.",
           },
         ].map((item) => (
