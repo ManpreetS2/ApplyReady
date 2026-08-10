@@ -1,34 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Application, Issue, ReadinessReport } from "@applyready/shared";
-import { api } from "../lib/api";
+import { api, ApiClientError } from "../lib/api";
 import { useConfig } from "../lib/config";
+import {
+  clearDemoIdIfMatches,
+  readDemoId,
+  rememberDemoId,
+} from "../lib/demoSession";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { IssueBadge, ReadinessBadge } from "../components/StatusBadge";
-
-const DEMO_SESSION_KEY = "applyready.publicDemoApplicationId";
-
-function rememberDemoId(id: string | null) {
-  try {
-    if (!id) sessionStorage.removeItem(DEMO_SESSION_KEY);
-    else sessionStorage.setItem(DEMO_SESSION_KEY, id);
-  } catch {
-    // Private mode / blocked storage — demo still works without refresh restore.
-  }
-}
-
-function readDemoId(): string | null {
-  try {
-    return sessionStorage.getItem(DEMO_SESSION_KEY);
-  } catch {
-    return null;
-  }
-}
 
 export function DemoPage() {
   const { publicDemoMode } = useConfig();
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [restoring, setRestoring] = useState(true);
   const [application, setApplication] = useState<Application | null>(null);
   const [report, setReport] = useState<ReadinessReport | null>(null);
@@ -49,13 +36,14 @@ export function DemoPage() {
         return;
       }
       try {
-        const [detail, stepsRes] = await Promise.all([
+        const [detail, stepsRes, exported] = await Promise.all([
           api.getApplication(savedId),
           api.demoSteps(),
+          api.exportApplication(savedId).catch(() => null),
         ]);
         if (cancelled) return;
         if (!detail.application.isDemo) {
-          rememberDemoId(null);
+          clearDemoIdIfMatches(savedId);
           setRestoring(false);
           return;
         }
@@ -69,39 +57,7 @@ export function DemoPage() {
         setStep(matched);
         setDone(demoStep >= 6);
         setError(null);
-        if (
-          detail.application.readinessScore != null &&
-          detail.application.readinessStatus
-        ) {
-          setReport({
-            applicationId: detail.application.id,
-            score: detail.application.readinessScore,
-            status: detail.application.readinessStatus,
-            breakdown: {
-              requiredPresent: 0,
-              requiredTotal: detail.requirements.filter((r) => r.required).length,
-              confirmedMatches: detail.matches.filter((m) => m.userConfirmed).length,
-              likelyMatches: detail.matches.filter((m) => m.status === "likely").length,
-              validationPassed: detail.validations.filter((v) => v.passed).length,
-              validationTotal: detail.validations.length,
-              blockingIssues: detail.issues.filter(
-                (i) => i.status === "open" && i.severity === "blocking",
-              ).length,
-              warnings: detail.issues.filter(
-                (i) => i.status === "open" && i.severity === "warning",
-              ).length,
-              uncertainRequirements: detail.requirements.filter(
-                (r) => !r.userConfirmed,
-              ).length,
-              consistencyConflicts: detail.conflicts.filter(
-                (c) => c.equivalent == null || c.equivalent === false,
-              ).length,
-              factors: [],
-            },
-            generatedAt:
-              detail.application.lastAnalyzedAt || new Date().toISOString(),
-          });
-        }
+        setReport(exported?.readiness ?? null);
       } catch (e) {
         const code =
           e && typeof e === "object" && "code" in e
@@ -109,7 +65,7 @@ export function DemoPage() {
             : "";
         // Only forget the session for terminal invalid-session errors.
         if (code === "NOT_FOUND") {
-          rememberDemoId(null);
+          clearDemoIdIfMatches(savedId);
         } else if (!cancelled) {
           setError(e);
         }
@@ -123,8 +79,20 @@ export function DemoPage() {
     };
   }, []);
 
-  async function start() {
+  function beginBusy(): boolean {
+    if (busyRef.current) return false;
+    busyRef.current = true;
     setBusy(true);
+    return true;
+  }
+
+  function endBusy() {
+    busyRef.current = false;
+    setBusy(false);
+  }
+
+  async function start() {
+    if (!beginBusy()) return;
     setError(null);
     try {
       const res = await api.startDemo();
@@ -137,21 +105,18 @@ export function DemoPage() {
     } catch (e) {
       setError(e);
     } finally {
-      setBusy(false);
+      endBusy();
     }
   }
 
-  async function advance(mode: "next" | "fix" | "reset") {
-    if (!application) return;
-    setBusy(true);
+  async function advance(mode: "fix" | "reset") {
+    if (!application || !beginBusy()) return;
     setError(null);
     try {
       const res =
         mode === "reset"
           ? await api.resetDemo(application.id)
-          : mode === "fix"
-            ? await api.fixDemo(application.id)
-            : await api.advanceDemo(application.id);
+          : await api.fixDemo(application.id);
       rememberDemoId(res.application.id);
       setApplication(res.application);
       setReport(res.analysis.report);
@@ -161,23 +126,23 @@ export function DemoPage() {
     } catch (e) {
       setError(e);
     } finally {
-      setBusy(false);
+      endBusy();
     }
   }
 
   async function retryRestore() {
     const savedId = readDemoId();
-    if (!savedId) return;
-    setBusy(true);
+    if (!savedId || !beginBusy()) return;
     setError(null);
     setRestoring(true);
     try {
-      const [detail, stepsRes] = await Promise.all([
+      const [detail, stepsRes, exported] = await Promise.all([
         api.getApplication(savedId),
         api.demoSteps(),
+        api.exportApplication(savedId).catch(() => null),
       ]);
       if (!detail.application.isDemo) {
-        rememberDemoId(null);
+        clearDemoIdIfMatches(savedId);
         return;
       }
       const demoStep = detail.application.demoStep ?? 0;
@@ -189,50 +154,18 @@ export function DemoPage() {
       setIssues(detail.issues);
       setStep(matched);
       setDone(demoStep >= 6);
-      if (
-        detail.application.readinessScore != null &&
-        detail.application.readinessStatus
-      ) {
-        setReport({
-          applicationId: detail.application.id,
-          score: detail.application.readinessScore,
-          status: detail.application.readinessStatus,
-          breakdown: {
-            requiredPresent: 0,
-            requiredTotal: detail.requirements.filter((r) => r.required).length,
-            confirmedMatches: detail.matches.filter((m) => m.userConfirmed).length,
-            likelyMatches: detail.matches.filter((m) => m.status === "likely").length,
-            validationPassed: detail.validations.filter((v) => v.passed).length,
-            validationTotal: detail.validations.length,
-            blockingIssues: detail.issues.filter(
-              (i) => i.status === "open" && i.severity === "blocking",
-            ).length,
-            warnings: detail.issues.filter(
-              (i) => i.status === "open" && i.severity === "warning",
-            ).length,
-            uncertainRequirements: detail.requirements.filter(
-              (r) => !r.userConfirmed,
-            ).length,
-            consistencyConflicts: detail.conflicts.filter(
-              (c) => c.equivalent == null || c.equivalent === false,
-            ).length,
-            factors: [],
-          },
-          generatedAt:
-            detail.application.lastAnalyzedAt || new Date().toISOString(),
-        });
-      }
+      setReport(exported?.readiness ?? null);
     } catch (e) {
       const code =
         e && typeof e === "object" && "code" in e
           ? String((e as { code: string }).code)
           : "";
       if (code === "NOT_FOUND") {
-        rememberDemoId(null);
+        clearDemoIdIfMatches(savedId);
       }
       setError(e);
     } finally {
-      setBusy(false);
+      endBusy();
       setRestoring(false);
     }
   }
@@ -250,6 +183,9 @@ export function DemoPage() {
       </p>
     );
   }
+
+  const expired =
+    error instanceof ApiClientError && error.code === "NOT_FOUND" && !application;
 
   return (
     <div
@@ -269,11 +205,28 @@ export function DemoPage() {
       </div>
 
       <ErrorBanner error={error} />
-      {error && !application && readDemoId() ? (
+      {expired ? (
+        <div className="card space-y-3 p-5">
+          <p className="text-sm text-ink-600 dark:text-ink-300">
+            This temporary demo has expired.
+          </p>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={busy}
+            aria-busy={busy}
+            onClick={start}
+          >
+            Start a new guided demo
+          </button>
+        </div>
+      ) : null}
+      {error && !application && readDemoId() && !expired ? (
         <button
           type="button"
           className="btn-secondary"
           disabled={busy}
+          aria-busy={busy}
           onClick={() => void retryRestore()}
         >
           Retry restore
@@ -285,7 +238,7 @@ export function DemoPage() {
         </p>
       ) : null}
 
-      {!application ? (
+      {!application && !expired ? (
         <section className="card space-y-4 p-6">
           <h2 className="font-display text-2xl font-semibold">
             Start Future Engineers Scholarship
@@ -307,7 +260,9 @@ export function DemoPage() {
             Start guided demo
           </button>
         </section>
-      ) : (
+      ) : null}
+
+      {application ? (
         <>
           <section className="card space-y-4 p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -318,7 +273,9 @@ export function DemoPage() {
                 <h2 className="font-display text-2xl font-semibold">
                   {step?.title || "Demo"}
                 </h2>
-                <p className="mt-2 text-ink-600 dark:text-ink-300">{step?.summary}</p>
+                <p className="mt-2 break-words text-ink-600 dark:text-ink-300">
+                  {step?.summary}
+                </p>
               </div>
               {report ? (
                 <ReadinessBadge status={report.status} score={report.score} />
@@ -330,18 +287,15 @@ export function DemoPage() {
                 className="btn-primary"
                 disabled={busy || done}
                 aria-busy={busy}
-                onClick={() => advance("fix")}
+                data-testid="demo-apply-fix"
+                onClick={(event) => {
+                  if (busyRef.current || done) return;
+                  const target = event.currentTarget;
+                  target.disabled = true;
+                  void advance("fix");
+                }}
               >
                 Apply suggested fix
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                disabled={busy || done}
-                aria-busy={busy}
-                onClick={() => advance("next")}
-              >
-                Next step
               </button>
               {!publicDemoMode ? (
                 <button
@@ -350,7 +304,7 @@ export function DemoPage() {
                   disabled={busy}
                   aria-busy={busy}
                   onClick={async () => {
-                    setBusy(true);
+                    if (!beginBusy()) return;
                     try {
                       const res = await api.analyze(application.id);
                       setReport(res.report);
@@ -358,7 +312,7 @@ export function DemoPage() {
                     } catch (e) {
                       setError(e);
                     } finally {
-                      setBusy(false);
+                      endBusy();
                     }
                   }}
                 >
@@ -370,7 +324,7 @@ export function DemoPage() {
                 className="btn-ghost"
                 disabled={busy}
                 aria-busy={busy}
-                onClick={() => advance("reset")}
+                onClick={() => void advance("reset")}
               >
                 Reset demo
               </button>
@@ -409,8 +363,10 @@ export function DemoPage() {
                 .map((issue) => (
                   <article key={issue.id} className="card space-y-2 p-5">
                     <IssueBadge severity={issue.severity} />
-                    <h3 className="font-display text-lg font-semibold">{issue.title}</h3>
-                    <p className="text-sm">{issue.explanation}</p>
+                    <h3 className="font-display text-lg font-semibold break-words">
+                      {issue.title}
+                    </h3>
+                    <p className="text-sm break-words">{issue.explanation}</p>
                     {issue.evidence ? (
                       <div className="evidence break-words">{issue.evidence}</div>
                     ) : null}
@@ -419,7 +375,7 @@ export function DemoPage() {
             )}
           </section>
         </>
-      )}
+      ) : null}
     </div>
   );
 }
