@@ -1,7 +1,12 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import type { Requirement } from "@applyready/shared";
+import type {
+  DocumentRecord,
+  Requirement,
+  VaultDocument,
+} from "@applyready/shared";
 import { api } from "../lib/api";
+import { AutofillUrlDialog } from "../components/AutofillUrlDialog";
 import { ErrorBanner } from "../components/ErrorBanner";
 
 const steps = [
@@ -33,6 +38,27 @@ export function NewApplicationPage() {
   const [sourceName, setSourceName] = useState("Official requirements");
   const [uploadStatus, setUploadStatus] = useState<string>("");
   const [analysisSummary, setAnalysisSummary] = useState<string>("");
+  const [autofillOpen, setAutofillOpen] = useState(false);
+  const [autofillUrl, setAutofillUrl] = useState("");
+  const [autofillStatus, setAutofillStatus] = useState("");
+  const [vaultDocs, setVaultDocs] = useState<VaultDocument[]>([]);
+  const [appDocs, setAppDocs] = useState<DocumentRecord[]>([]);
+
+  useEffect(() => {
+    if (step !== 3 || !appId) return;
+    let cancelled = false;
+    Promise.all([
+      api.listVault().catch(() => ({ documents: [] as VaultDocument[] })),
+      api.getApplication(appId).catch(() => null),
+    ]).then(([vaultRes, appRes]) => {
+      if (cancelled) return;
+      setVaultDocs(vaultRes.documents);
+      if (appRes) setAppDocs(appRes.documents);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, appId]);
 
   const progress = useMemo(() => ((step + 1) / steps.length) * 100, [step]);
 
@@ -49,6 +75,49 @@ export function NewApplicationPage() {
       setStep(1);
     } catch (e) {
       setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function continueFromDetails() {
+    if (!appId) {
+      await createApp();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.updateApplication(appId, {
+        ...form,
+        deadline: form.deadline || null,
+        notes: form.notes || null,
+      });
+      setStep(1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function autofillFromUrl() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.previewUrl(autofillUrl);
+      const host = hostnameOf(autofillUrl);
+      setForm((prev) => ({
+        ...prev,
+        name: prev.name || res.title.trim().slice(0, 120),
+        organization: prev.organization || titleCase(host),
+        notes: prev.notes || res.description,
+      }));
+      setAutofillStatus("Prefilled empty fields from the page.");
+    } catch (e) {
+      setAutofillStatus(
+        e instanceof Error ? e.message : "Could not fetch that URL.",
+      );
     } finally {
       setBusy(false);
     }
@@ -89,9 +158,40 @@ export function NewApplicationPage() {
     try {
       for (const file of Array.from(files)) {
         setUploadStatus(`Parsing ${file.name}…`);
-        await api.uploadDocument(appId, file);
+        const res = await api.uploadDocument(appId, file);
+        setAppDocs((list) => [...list, res.document]);
       }
       setUploadStatus(`Uploaded ${files.length} document(s).`);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function attachVaultDocument(vaultId: string) {
+    if (!appId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.useVault(appId, vaultId);
+      setAppDocs((list) => [...list, res.document]);
+      setUploadStatus("Attached from vault.");
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeDocument(id: string) {
+    if (!appId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteDocument(id);
+      setAppDocs((list) => list.filter((d) => d.id !== id));
+      setUploadStatus("Removed document.");
     } catch (e) {
       setError(e);
     } finally {
@@ -118,11 +218,22 @@ export function NewApplicationPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <h1 className="font-display text-4xl font-semibold">New application</h1>
-        <p className="mt-2 text-ink-600 dark:text-ink-300">
-          Guided setup with evidence-backed requirement extraction.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="font-display text-4xl font-semibold">New application</h1>
+          <p className="mt-2 text-ink-600 dark:text-ink-300">
+            Guided setup with evidence-backed requirement extraction.
+          </p>
+        </div>
+        {step === 0 && (
+          <button
+            type="button"
+            className="btn-secondary shrink-0"
+            onClick={() => setAutofillOpen(true)}
+          >
+            Autofill from URL
+          </button>
+        )}
       </div>
 
       <div className="card p-4" aria-label="Setup progress">
@@ -194,14 +305,16 @@ export function NewApplicationPage() {
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
             />
           </Field>
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={busy || !form.name || !form.organization}
-            onClick={createApp}
-          >
-            Continue
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy || !form.name || !form.organization}
+              onClick={continueFromDetails}
+            >
+              Continue
+            </button>
+          </div>
         </section>
       )}
 
@@ -271,9 +384,24 @@ export function NewApplicationPage() {
             </Field>
           )}
 
-          <button type="button" className="btn-primary" disabled={busy} onClick={ingestSource}>
-            Extract requirements
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => setStep(0)}
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy}
+              onClick={ingestSource}
+            >
+              Extract requirements
+            </button>
+          </div>
         </section>
       )}
 
@@ -390,14 +518,35 @@ export function NewApplicationPage() {
               </div>
             </article>
           ))}
-          <button type="button" className="btn-primary" onClick={() => setStep(3)}>
-            Continue to documents
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setStep(1)}
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setStep(3)}
+            >
+              Continue to documents
+            </button>
+          </div>
         </section>
       )}
 
       {step === 3 && (
         <section className="card space-y-4 p-6">
+          <div>
+            <p className="label">What to include ({form.type})</p>
+            <ul className="list-disc space-y-1 pl-5 text-sm text-ink-600 dark:text-ink-300">
+              {DOCUMENT_GUIDANCE[form.type]?.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
           <Field label="Upload application documents" htmlFor="docs">
             <input
               id="docs"
@@ -409,9 +558,78 @@ export function NewApplicationPage() {
             />
           </Field>
           {uploadStatus ? <p className="text-sm">{uploadStatus}</p> : null}
-          <button type="button" className="btn-primary" onClick={() => setStep(4)}>
-            Continue to analysis
-          </button>
+          {appDocs.length > 0 && (
+            <div>
+              <p className="label">Attached documents</p>
+              <ul className="space-y-2">
+                {appDocs.map((doc) => (
+                  <li
+                    key={doc.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] px-3 py-2"
+                  >
+                    <span className="min-w-0 truncate text-sm">
+                      {doc.originalFilename}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-ghost text-sm"
+                      disabled={busy}
+                      onClick={() => removeDocument(doc.id)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {vaultDocs.length > 0 && (
+            <div>
+              <p className="label">Select from vault</p>
+              <ul className="space-y-2">
+                {vaultDocs.map((doc) => {
+                  const attached = appDocs.some(
+                    (d) => d.vaultDocumentId === doc.id,
+                  );
+                  return (
+                    <li
+                      key={doc.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] px-3 py-2"
+                    >
+                      <span className="min-w-0 text-sm">
+                        <span className="block truncate">{doc.originalFilename}</span>
+                        <span className="text-xs text-ink-500">{doc.category}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className={attached ? "btn-ghost text-sm" : "btn-secondary text-sm"}
+                        disabled={attached || busy}
+                        onClick={() => attachVaultDocument(doc.id)}
+                      >
+                        {attached ? "Attached" : "Attach"}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setStep(2)}
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setStep(4)}
+            >
+              Continue to analysis
+            </button>
+          </div>
         </section>
       )}
 
@@ -421,9 +639,19 @@ export function NewApplicationPage() {
             Run matching, validation, consistency checks, and readiness scoring on your local
             packet.
           </p>
-          <button type="button" className="btn-primary" disabled={busy} onClick={runAnalyze}>
-            Analyze packet
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => setStep(3)}
+            >
+              Back
+            </button>
+            <button type="button" className="btn-primary" disabled={busy} onClick={runAnalyze}>
+              Analyze packet
+            </button>
+          </div>
         </section>
       )}
 
@@ -445,6 +673,22 @@ export function NewApplicationPage() {
           </div>
         </section>
       )}
+
+      <AutofillUrlDialog
+        open={autofillOpen}
+        url={autofillUrl}
+        busy={busy}
+        status={autofillStatus}
+        onUrlChange={(next) => {
+          setAutofillUrl(next);
+          setAutofillStatus("");
+        }}
+        onSubmit={autofillFromUrl}
+        onClose={() => {
+          setAutofillOpen(false);
+          setAutofillStatus("");
+        }}
+      />
     </div>
   );
 }
@@ -466,4 +710,44 @@ function Field({
       {children}
     </div>
   );
+}
+
+const DOCUMENT_GUIDANCE: Record<string, string[]> = {
+  scholarship: [
+    "Transcript",
+    "Essays",
+    "Recommendation letters",
+    "Resume optional.",
+  ],
+  college: [
+    "Official transcript",
+    "Test scores",
+    "Personal statement/essays",
+    "Recommendation letters.",
+  ],
+  internship: [
+    "Resume/CV",
+    "Cover letter",
+    "Portfolio or writing samples",
+    "Transcript if requested.",
+  ],
+  other: [
+    "Any documents the application requests (e.g. forms, portfolios, references).",
+  ],
+};
+
+function hostnameOf(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[.-]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
