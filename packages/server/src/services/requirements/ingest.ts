@@ -6,6 +6,7 @@ import { excerpt } from "../../utils/text.js";
 import { AppError } from "../../utils/errors.js";
 import { extractHtmlText, LocalDocumentReader } from "../documents/readers.js";
 import { fetchPublicResource } from "../urlFetch.js";
+import { resolveGithubResource } from "../github.js";
 import { runRequirementPipeline } from "./extractor.js";
 
 export async function ingestPastedText(
@@ -49,27 +50,37 @@ export async function ingestUrl(
   const app = repos.getApplication(applicationId);
   if (!app) throw new AppError("NOT_FOUND", "Application not found", 404);
 
-  const fetched = await fetchPublicResource(url);
-  let text = fetched.text;
+  let text = "";
   let sourceType: SourceType = "url";
   let warnings: string[] = [];
+  let sourceUrl = url;
 
-  if (fetched.isPdf) {
-    const reader = new LocalDocumentReader();
-    const parsed = await reader.read(
-      fetched.body,
-      "requirements.pdf",
-      "application/pdf",
-    );
-    text = parsed.text;
-    sourceType = "pdf";
-    warnings = parsed.warnings;
-  } else if (
-    fetched.contentType.includes("html") ||
-    fetched.text.includes("<html")
-  ) {
-    const extracted = await extractHtmlText(fetched.text);
-    text = extracted.text;
+  const githubResource = await resolveGithubResource(url);
+  if (githubResource) {
+    text = githubResource.text;
+    sourceUrl = githubResource.url;
+  } else {
+    const fetched = await fetchPublicResource(url);
+    sourceUrl = fetched.url;
+    text = fetched.text;
+
+    if (fetched.isPdf) {
+      const reader = new LocalDocumentReader();
+      const parsed = await reader.read(
+        fetched.body,
+        "requirements.pdf",
+        "application/pdf",
+      );
+      text = parsed.text;
+      sourceType = "pdf";
+      warnings = parsed.warnings;
+    } else if (
+      fetched.contentType.includes("html") ||
+      fetched.text.includes("<html")
+    ) {
+      const extracted = await extractHtmlText(fetched.text);
+      text = extracted.text;
+    }
   }
 
   if (!text || text.trim().length < 20) {
@@ -85,8 +96,8 @@ export async function ingestUrl(
   const source = repos.createSource({
     applicationId,
     sourceType,
-    sourceName: fetched.url,
-    sourceUrl: fetched.url,
+    sourceName: sourceUrl,
+    sourceUrl,
     extractedTextPreview: excerpt(text, 400),
   });
 
@@ -94,8 +105,8 @@ export async function ingestUrl(
     applicationName: app.name,
     organization: app.organization,
     sourceType,
-    sourceName: fetched.url,
-    sourceUrl: fetched.url,
+    sourceName: sourceUrl,
+    sourceUrl,
   });
 
   const requirements = repos.insertRequirementsFromDrafts(

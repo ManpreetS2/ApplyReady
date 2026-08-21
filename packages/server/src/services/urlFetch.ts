@@ -220,6 +220,7 @@ async function requestPinned(
   target: URL,
   addresses: LookupAddress[] | null,
   signal: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ): Promise<RawResponse> {
   const transport = target.protocol === "https:" ? https : http;
   const port = target.port || (target.protocol === "https:" ? "443" : "80");
@@ -238,6 +239,7 @@ async function requestPinned(
           "User-Agent": "ApplyReadyLocal/1.0 (+local document readiness tool)",
           Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
           Connection: "close",
+          ...extraHeaders,
         },
         lookup: addresses ? (pinnedLookup(addresses) as never) : undefined,
       },
@@ -319,8 +321,14 @@ export type FetchedPublicResource = {
   isPdf: boolean;
 };
 
+export type FetchPublicResourceOptions = {
+  allowJson?: boolean;
+  headers?: Record<string, string>;
+};
+
 export async function fetchPublicResource(
   rawUrl: string,
+  options?: FetchPublicResourceOptions,
 ): Promise<FetchedPublicResource> {
   const initial = await assertSafePublicUrl(rawUrl);
   const controller = new AbortController();
@@ -335,7 +343,12 @@ export async function fetchPublicResource(
       const addresses = net.isIP(currentUrl.hostname)
         ? null
         : await resolveValidatedAddresses(currentUrl.hostname);
-      response = await requestPinned(currentUrl, addresses, controller.signal);
+      response = await requestPinned(
+        currentUrl,
+        addresses,
+        controller.signal,
+        options?.headers,
+      );
 
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
 
@@ -401,7 +414,10 @@ export async function fetchPublicResource(
       );
     }
 
-    if (!isAllowedFetchContentType(contentType, response.body)) {
+    const contentTypeAllowed =
+      isAllowedFetchContentType(contentType, response.body) ||
+      (options?.allowJson === true && contentType.includes("application/json"));
+    if (!contentTypeAllowed) {
       throw new AppError(
         "UNSUPPORTED_CONTENT_TYPE",
         `Unsupported content type: ${contentType || "unknown"}.`,

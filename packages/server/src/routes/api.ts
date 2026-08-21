@@ -54,6 +54,11 @@ import {
 } from "../services/demo/demo.js";
 import { getDemoFixPreview } from "../services/demo/preview.js";
 import { computeReadiness } from "../services/readiness/score.js";
+import { extractHtmlText } from "../services/documents/readers.js";
+import {
+  assertSafePublicUrl,
+  fetchPublicResource,
+} from "../services/urlFetch.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -166,6 +171,29 @@ export function createApiRouter(db: Database.Database): Router {
       const body = createApplicationSchema.parse(req.body);
       const application = repos.createApplication(body);
       res.status(201).json({ application });
+    }),
+  );
+
+  router.post(
+    "/applications/preview-url",
+    asyncHandler(async (req, res) => {
+      const body = urlSourceSchema.parse(req.body);
+      await assertSafePublicUrl(body.url);
+      const fetched = await fetchPublicResource(body.url);
+      if (fetched.isPdf) {
+        throw new AppError(
+          "UNSUPPORTED_CONTENT_TYPE",
+          "URL points to a PDF; preview needs an HTML or text page.",
+          400,
+          ["Use a public webpage URL."],
+        );
+      }
+      const extracted = await extractHtmlText(fetched.text);
+      res.json({
+        title: extracted.title || "",
+        description: extracted.text.slice(0, 300),
+        text: extracted.text,
+      });
     }),
   );
 

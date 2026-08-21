@@ -89,6 +89,15 @@ export const api = {
     request<{ ok: boolean }>(`/api/applications/${id}`, { method: "DELETE" }),
   exportApplication: (id: string) =>
     request<ApplicationExport>(`/api/applications/${id}/export`),
+  previewUrl: (url: string) =>
+    request<{ title: string; description: string; text: string }>(
+      "/api/applications/preview-url",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      },
+    ),
   addTextSource: (id: string, text: string, sourceName: string) =>
     request<{ requirements: Requirement[] }>(
       `/api/applications/${id}/sources/text`,
